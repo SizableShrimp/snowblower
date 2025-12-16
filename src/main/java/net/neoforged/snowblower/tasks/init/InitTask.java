@@ -21,6 +21,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
+import net.neoforged.snowblower.data.MinecraftVersion;
 import net.neoforged.snowblower.util.Cache;
 import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
@@ -31,9 +32,7 @@ import org.eclipse.jgit.lib.FileMode;
 import org.eclipse.jgit.lib.ObjectId;
 
 import net.neoforged.snowblower.Generator;
-import net.neoforged.snowblower.Main;
 import net.neoforged.snowblower.util.Util;
-import net.neoforged.srgutils.MinecraftVersion;
 
 public class InitTask {
     private static final String COMMIT_MESSAGE = "Initial commit";
@@ -108,7 +107,7 @@ public class InitTask {
             );
             Util.add(git, ignore);
 
-            try (var fs = FileSystems.newFileSystem(getOurJar(), (ClassLoader) null)) {
+            try (var fs = Util.isDev() ? null : FileSystems.newFileSystem(getOurJar(), (ClassLoader) null)) {
                 Path copyParentFolder = Util.isDev() ? Util.getSourcePath() : fs.getRootDirectories().iterator().next();
                 List<String> toCopy = List.of("gradlew", "gradlew.bat", "gradle/wrapper");
                 AddCommand addCmd = git.add();

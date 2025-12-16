@@ -30,8 +30,7 @@ public class MergeTask {
                     .put(Tools.MERGETOOL, depCache)
                     .put("client", getSha("client", version))
                     .put("server-full", getSha("server", version))
-                    .put("map", mappings)
-                    .put(Tools.MERGETOOL, depCache);
+                    .put("map", mappings);
             if (key.isValid(keyF, k -> !k.equals("server"))) {
                 LOGGER.debug("  Hitting cache for joined jar");
                 return joinedJar;
@@ -52,9 +51,11 @@ public class MergeTask {
         if (!Files.exists(joinedJar) || !key.isValid(keyF)) {
             LOGGER.debug("  Merging client and server jars");
             Merger merger = new Merger(clientJar.toFile(), serverJar.toFile(), joinedJar.toFile());
-            // Whitelist only Mojang classes to process
-            var map = IMappingFile.load(mappings.toFile());
-            map.getClasses().forEach(cls -> merger.whitelist(cls.getOriginal()));
+            if (mappings != null) {
+                // Whitelist only Mojang classes to process
+                var map = IMappingFile.load(mappings.toFile());
+                map.getClasses().forEach(cls -> merger.whitelist(cls.getOriginal()));
+            }
             merger.annotate(AnnotationVersion.API, true);
             merger.keepData();
             merger.skipMeta();

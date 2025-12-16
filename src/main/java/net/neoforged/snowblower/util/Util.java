@@ -30,6 +30,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import net.neoforged.snowblower.Main;
+import net.neoforged.snowblower.data.MinecraftVersion;
 import net.neoforged.snowblower.data.Version;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
@@ -37,9 +38,7 @@ import org.eclipse.jgit.lib.PersonIdent;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonDeserializer;
 
-import net.neoforged.srgutils.MinecraftVersion;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,7 +46,7 @@ import org.slf4j.LoggerFactory;
 public class Util {
     private static final Logger LOGGER = LoggerFactory.getLogger(Util.class);
     public static final Gson GSON = new GsonBuilder()
-        .registerTypeAdapter(MinecraftVersion.class, (JsonDeserializer<MinecraftVersion>) (json, typeOfT, context) -> MinecraftVersion.from(json.getAsString()))
+        .registerTypeAdapter(MinecraftVersion.class, MinecraftVersion.Deserializer.INSTANCE)
         .create();
     public static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
         .connectTimeout(Duration.of(5, ChronoUnit.SECONDS))

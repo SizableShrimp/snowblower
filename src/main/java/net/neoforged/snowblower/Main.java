@@ -9,9 +9,9 @@ import joptsimple.OptionParser;
 import joptsimple.OptionSet;
 import net.neoforged.snowblower.data.Config;
 import net.neoforged.snowblower.data.Config.BranchSpec;
+import net.neoforged.snowblower.data.MinecraftVersion;
 import net.neoforged.snowblower.util.DependencyHashCache;
 import net.neoforged.snowblower.util.Util;
-import net.neoforged.srgutils.MinecraftVersion;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.transport.CredentialsProvider;
 import org.eclipse.jgit.transport.URIish;
@@ -91,8 +91,6 @@ public class Main {
 
         var startVer = options.has(startVerO) ? MinecraftVersion.from(options.valueOf(startVerO)) : null;
         var targetVer = options.has(targetVerO) ? MinecraftVersion.from(options.valueOf(targetVerO)) : null;
-        if (targetVer != null && targetVer.compareTo(startVer) < 0)
-            throw new IllegalArgumentException("Target version must be greater than or equal to start version");
         var cliBranch = new BranchSpec(options.has(releasesOnlyO) ? "release" : "all", startVer, targetVer);
 
         String branchName = options.valueOf(branchNameO);

@@ -43,7 +43,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.net.URL;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -105,7 +104,7 @@ public class Generator implements AutoCloseable {
             "--rename-parameters",
             "--no-use-method-parameters"
     };
-    
+
     public Generator(Path output, Path cache, Path extraMappings, DependencyHashCache depCache, List<String> includes, List<String> excludes) {
         this.output = output.toAbsolutePath().normalize();
         this.cache = cache.toAbsolutePath().normalize();
@@ -270,7 +269,7 @@ public class Generator implements AutoCloseable {
             if (targetVer == null)
                 targetVer = versions.get(0).id();
         } else {
-            var exclude = versions.stream().filter(v -> v.id().getType().isSpecial()).map(VersionInfo::id).collect(Collectors.toList());
+            var exclude = versions.stream().filter(v -> v.id().type().isSpecial()).map(VersionInfo::id).collect(Collectors.toList());
             if (this.branch.includeVersions() != null)
                 exclude.removeAll(this.branch.includeVersions());
             if (this.branch.excludeVersions() != null)
@@ -477,16 +476,19 @@ public class Generator implements AutoCloseable {
             if (!Files.exists(json) || !HashFunction.SHA1.hash(json).equals(ver.sha1()))
                 Util.downloadFile(json, ver.url(), ver.sha1());
 
-            var dls = Version.load(json).downloads();
-            if (dls.containsKey("client_mappings") && dls.containsKey("server_mappings"))
+            Version fullVersion = Version.load(json);
+            var dls = fullVersion.downloads();
+            if (dls.containsKey("client_mappings") && dls.containsKey("server_mappings")) {
                 ret.add(ver);
-            else if (extraMappings != null) {
+            } else if (extraMappings != null) {
                 //TODO: Convert extraMappings into a object with 'boolean hasMapping(version, side)' and 'Path getMapping(version, size)'
                 var root = extraMappings.resolve(ver.type()).resolve(ver.id().toString()).resolve("maps");
                 var client = root.resolve("client.txt");
                 var server = root.resolve("server.txt");
                 if (Files.exists(client) && Files.exists(server))
                     ret.add(ver);
+            } else if (fullVersion.isUnobfuscated()) {
+                ret.add(ver);
             }
 
         }
@@ -537,7 +539,7 @@ public class Generator implements AutoCloseable {
 
         if (decomped == null) {
             var mappings = MappingTask.getMergedMappings(cache, version, extraMappings);
-            if (mappings == null)
+            if (!version.isUnobfuscated() && mappings == null)
                 return;
 
             var joined = MergeTask.getJoinedJar(cache, version, mappings, depCache, partialCache);
@@ -571,7 +573,7 @@ public class Generator implements AutoCloseable {
                         if (!matcher.matches(relative)) {
                             return;
                         }
-                        
+
                         var target = (p.toString().endsWith(".java") ? java : resources).resolve(relative.toString());
 
                         if (existingFiles.remove(target)) {
@@ -661,7 +663,7 @@ public class Generator implements AutoCloseable {
 
     private Path getRenamedJar(Path cache, Path joined, Path mappings, Path libCache, List<Path> libs) throws IOException {
         var key = new Cache()
-            .put(Tools.FART, this.depCache)
+            .put(Tools.ART, this.depCache)
             .put("joined", joined)
             .put("map", mappings);
 
@@ -733,17 +735,17 @@ public class Generator implements AutoCloseable {
         }
         return ret;
     }
-    
+
     private static PathMatcher createMatcher(FileSystem fs, List<String> includes, List<String> excludes) {
         final PathMatcher matcher;
         if (!includes.isEmpty()) {
             // Only include those matching the inclusive patterns
-            matcher = createMatcher(fs, includes); 
+            matcher = createMatcher(fs, includes);
         } else {
             // Include everything
             matcher = path -> true;
         }
-        
+
         if (!excludes.isEmpty()) {
             // Exclude those matching the exclusive patterns
             var excludesMatcher = createMatcher(fs, excludes);
@@ -753,7 +755,7 @@ public class Generator implements AutoCloseable {
             return matcher;
         }
     }
-    
+
     private static PathMatcher createMatcher(FileSystem fs, List<String> globPatterns) {
         if (globPatterns.isEmpty()) {
             return path -> false;

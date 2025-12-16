@@ -22,34 +22,39 @@ import org.slf4j.LoggerFactory;
 
 public class MappingTask {
     private static final Logger LOGGER = LoggerFactory.getLogger(MappingTask.class);
-    
-    public static Path getMergedMappings(Path cache, Version version, Path extraMappings) throws IOException {
-        var clientMojToObf = downloadMappings(cache, extraMappings, version, "client");
 
-        if (clientMojToObf == null) {
+    public static Path getMergedMappings(Path cache, Version version, Path extraMappings) throws IOException {
+        boolean unobfuscated = version.isUnobfuscated();
+        var clientMojToObf = downloadMappings(cache, extraMappings, version, unobfuscated, "client");
+
+        if (!unobfuscated && clientMojToObf == null) {
             LOGGER.debug("  Client mappings not found, skipping version");
             return null;
         }
 
-        var serverMojToObf = downloadMappings(cache, extraMappings, version, "server");
+        var serverMojToObf = downloadMappings(cache, extraMappings, version, unobfuscated, "server");
 
-        if (serverMojToObf == null) {
+        if (!unobfuscated && serverMojToObf == null) {
             LOGGER.debug("  Server mappings not found, skipping version");
             return null;
         }
 
-        if (!canMerge(clientMojToObf, serverMojToObf))
+        if (clientMojToObf == null && serverMojToObf == null)
+            return null;
+
+        if (clientMojToObf != null && serverMojToObf != null && !canMerge(clientMojToObf, serverMojToObf))
             throw new IllegalStateException("Client mappings for " + version.id() + " are not a strict superset of the server mappings.");
 
         var key = new Cache()
             // Should we add code version? I don't think it matters much for this one.
-            .put("client", cache.resolve("client_mappings.txt"))
-            .put("server", cache.resolve("server_mappings.txt"));
+            .put("client", clientMojToObf == null ? null : cache.resolve("client_mappings.txt"))
+            .put("server", serverMojToObf == null ? null : cache.resolve("server_mappings.txt"));
         var keyF = cache.resolve("obf_to_moj.tsrg.cache");
         var ret = cache.resolve("obf_to_moj.tsrg");
 
         if (!Files.exists(ret) || !key.isValid(keyF)) {
-            clientMojToObf.write(ret, IMappingFile.Format.TSRG2, true);
+            var mappingsToWrite = clientMojToObf != null ? clientMojToObf : serverMojToObf;
+            mappingsToWrite.write(ret, IMappingFile.Format.TSRG2, true);
             key.write(keyF);
         }
 
@@ -57,7 +62,7 @@ public class MappingTask {
     }
 
 
-    private static IMappingFile downloadMappings(Path cache, Path extraMappings, Version version, String type) throws IOException {
+    private static IMappingFile downloadMappings(Path cache, Path extraMappings, Version version, boolean unobfuscated, String type) throws IOException {
         var mappings = cache.resolve(type + "_mappings.txt");
 
         if (!Files.exists(mappings)) {
@@ -71,7 +76,7 @@ public class MappingTask {
                 }
             }
 
-            if (!copiedFromExtra && !Util.downloadFile(mappings, version, type + "_mappings"))
+            if (!copiedFromExtra && (unobfuscated || !Util.downloadFile(mappings, version, type + "_mappings")))
                 return null;
         }
 
