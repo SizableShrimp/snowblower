@@ -35,7 +35,7 @@ public record Version(
     }
 
     public boolean isUnobfuscated() {
-        return FIRST_UNOBFUSCATED_RELEASE_DATE.compareTo(this.releaseTime) <= 0;
+        return FIRST_UNOBFUSCATED_RELEASE_DATE.compareTo(this.releaseTime) <= 0 || this.id.version().endsWith("_unobfuscated");
     }
 
     public record Download(String path, String sha1, int size, URL url) {}

@@ -4,18 +4,14 @@
  */
 package net.neoforged.snowblower;
 
-import net.neoforged.art.api.IdentifierFixerConfig;
-import net.neoforged.art.api.Renamer;
-import net.neoforged.art.api.SignatureStripperConfig;
-import net.neoforged.art.api.SourceFixerConfig;
-import net.neoforged.art.api.Transformer;
 import net.neoforged.snowblower.data.Config;
 import net.neoforged.snowblower.data.Config.BranchSpec;
+import net.neoforged.snowblower.data.MinecraftVersion;
 import net.neoforged.snowblower.data.Version;
 import net.neoforged.snowblower.data.VersionManifestV2;
 import net.neoforged.snowblower.data.VersionManifestV2.VersionInfo;
 import net.neoforged.snowblower.tasks.MappingTask;
-import net.neoforged.snowblower.tasks.MergeTask;
+import net.neoforged.snowblower.tasks.MergeRemapTask;
 import net.neoforged.snowblower.tasks.enhance.EnhanceVersionTask;
 import net.neoforged.snowblower.tasks.init.InitTask;
 import net.neoforged.snowblower.util.Cache;
@@ -54,6 +50,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -68,6 +65,10 @@ import java.util.stream.StreamSupport;
 public class Generator implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(Generator.class);
     public static final int COMMIT_BATCH_SIZE = 10;
+    private static final MinecraftVersion VER1_21_11 = MinecraftVersion.from("1.21.11");
+    private static final MinecraftVersion VER1_21_11_UNOBFUSCATED = MinecraftVersion.from("1.21.11_unobfuscated");
+    private static final VersionInfo VER1_21_11_UNOBFUSCATED_INFO = new VersionInfo(VER1_21_11_UNOBFUSCATED, "release", null, new Date(1765284195000L),
+            new Date(1765284195000L), "327be7759157b04495c591dbb721875e341877af", 1);
 
     private final Path output;
     private final Path cache;
@@ -86,23 +87,18 @@ public class Generator implements AutoCloseable {
     private boolean freshIfRequired;
     private boolean partialCache;
     private final String[] decompileArgs = new String[]{
-            // For comparison, see NeoForm parameters for a recent Minecraft version here:
-            // https://github.com/neoforged/NeoForm/blob/main/versions/release/1.21.5/config.json#L10
+            // For comparison, see NeoForm parameters for 26.1-snapshot-1 here:
+            // https://github.com/neoforged/NeoForm/blob/64142f5933f3e68a0d73abc60f1672b1ec90d17a/settings.gradle#L36-L51
             "--decompile-inner",
             "--remove-bridge",
             "--decompile-generics",
             "--ascii-strings",
             "--remove-synthetic",
             "--include-classpath",
-            "--variable-renaming=jad",
             "--ignore-invalid-bytecode",
             "--bytecode-source-mapping",
-            "--dump-code-lines",
             "--indent-string=    ",
-            // These parameters are exclusive to Snowblower, since we do not overwrite all method parameters
-            // using generated SRG parameter names, we also apply JAD renaming here.
-            "--rename-parameters",
-            "--no-use-method-parameters"
+            "--dump-code-lines"
     };
 
     public Generator(Path output, Path cache, Path extraMappings, DependencyHashCache depCache, List<String> includes, List<String> excludes) {
@@ -269,7 +265,7 @@ public class Generator implements AutoCloseable {
             if (targetVer == null)
                 targetVer = versions.get(0).id();
         } else {
-            var exclude = versions.stream().filter(v -> v.id().type().isSpecial()).map(VersionInfo::id).collect(Collectors.toList());
+            var exclude = versions.stream().map(VersionInfo::id).filter(id -> id.type().isSpecial()).collect(Collectors.toList());
             if (this.branch.includeVersions() != null)
                 exclude.removeAll(this.branch.includeVersions());
             if (this.branch.excludeVersions() != null)
@@ -342,6 +338,24 @@ public class Generator implements AutoCloseable {
         List<VersionInfo> toGenerate = new ArrayList<>(versions.subList(endIdx, startIdx + 1));
         if (this.branch.type().equals("release"))
             toGenerate.removeIf(v -> !v.type().equals("release"));
+
+        int idx1_21_11 = -1;
+        for (int i = 0; i < toGenerate.size(); i++) {
+            var versionInfo = toGenerate.get(i);
+            if (VER1_21_11.equals(versionInfo.id())) {
+                idx1_21_11 = i;
+                break;
+            }
+        }
+
+        // If we are generating 1.21.11, add "1.21.11_unobfuscated" so that we get a cleaner diff with whatever
+        // version comes after 1.21.11, since versions past 1.21.11 are unobfuscated and preserve the LVT.
+        // Using the LVT, the decompiled output will have the original names for all parameters and local variables.
+        if (idx1_21_11 != -1) {
+            // Insert the unobfuscated version where the obfuscated version currently is so that it is counted as newer.
+            toGenerate.add(idx1_21_11, VER1_21_11_UNOBFUSCATED_INFO);
+        }
+
         // Reverse so it's in oldest first
         Collections.reverse(toGenerate);
 
@@ -390,7 +404,7 @@ public class Generator implements AutoCloseable {
     }
 
     private void pushRemainingCommits() throws GitAPIException, IOException {
-        if (remoteName == null) return;
+        if (!this.push || this.remoteName == null) return;
         final ObjectId remoteBranch = git.getRepository().resolve("refs/remotes/" + remoteName + "/" + branchName);
         if (remoteBranch == null) return;
 
@@ -422,7 +436,7 @@ public class Generator implements AutoCloseable {
         // Walk all commits on the remote branch (newest -> oldest)
         for (final RevCommit commit : git.log().add(remoteBranch).setMaxCount(Integer.MAX_VALUE).call()) {
             final int idx = ourCommits.indexOf(commit);
-            if (idx == 0) break; // If it is the first commit, the branch is up-to-date
+            if (idx == 0) return; // If it is the first commit, the branch is up-to-date
             // If we find the common ancestor that is NOT the first commit push
             else if (idx > 0) {
                 pusher.push(idx);
@@ -473,8 +487,19 @@ public class Generator implements AutoCloseable {
         for (var ver : versions) {
             // Download the version json file.
             var json = cache.resolve(ver.id().toString()).resolve("version.json");
-            if (!Files.exists(json) || !HashFunction.SHA1.hash(json).equals(ver.sha1()))
-                Util.downloadFile(json, ver.url(), ver.sha1());
+            if (!Files.exists(json) || !HashFunction.SHA1.hash(json).equals(ver.sha1())) {
+                if (VER1_21_11_UNOBFUSCATED.equals(ver.id())) {
+                    try (var in = Generator.class.getResourceAsStream("/1_21_11_unobfuscated.json")) {
+                        if (in == null)
+                            throw new IOException("Failed to find embedded version file for 1.21.11_unobfuscated");
+
+                        Files.createDirectories(json.getParent());
+                        Files.copy(in, json);
+                    }
+                } else {
+                    Util.downloadFile(json, ver.url(), ver.sha1());
+                }
+            }
 
             Version fullVersion = Version.load(json);
             var dls = fullVersion.downloads();
@@ -519,18 +544,16 @@ public class Generator implements AutoCloseable {
             var keyF = cache.resolve("joined-decompiled.jar.cache");
             if (Files.exists(decompJar) && Files.exists(keyF)) {
                 var key = new Cache()
-                        .put(Tools.VINEFLOWER, this.depCache);
-
-                if (partialCache) {
-                    key.put("downloads-client", version.downloads().get("client").sha1());
-                    key.put("downloads-client_mappings", version.downloads().get("client_mappings").sha1());
-                    key.put("downloads-server", version.downloads().get("server").sha1());
-                    key.put("downloads-server", version.downloads().get("server_mappings").sha1());
-                }
+                        .put(Tools.VINEFLOWER, this.depCache)
+                        .put(Tools.VINEFLOWER_PLUGINS, this.depCache)
+                        .put("downloads-client", version.downloads().get("client").sha1())
+                        .put("downloads-client_mappings", version.downloads().get("client_mappings").sha1())
+                        .put("downloads-server", version.downloads().get("server").sha1())
+                        .put("downloads-server", version.downloads().get("server_mappings").sha1());
 
                 key.put("decompileArgs", String.join(" ", decompileArgs));
 
-                if (key.isValid(keyF, str -> str.equals(Tools.VINEFLOWER) || str.equals("decompileArgs") || str.startsWith("downloads-"))) {
+                if (key.isValid(keyF, str -> str.equals(Tools.VINEFLOWER) || str.equals(Tools.VINEFLOWER_PLUGINS) || str.equals("decompileArgs") || str.startsWith("downloads-"))) {
                     decomped = decompJar;
                     LOGGER.debug("  Decompiled jar partial cache hit");
                 }
@@ -542,10 +565,9 @@ public class Generator implements AutoCloseable {
             if (!version.isUnobfuscated() && mappings == null)
                 return;
 
-            var joined = MergeTask.getJoinedJar(cache, version, mappings, depCache, partialCache);
+            var joined = MergeRemapTask.getJoinedRemappedJar(cache, version, mappings, depCache, partialCache);
             var libs = getLibraries(libCache, version);
-            var renamed = getRenamedJar(cache, joined, mappings, libCache, libs);
-            decomped = getDecompiledJar(cache, version, renamed, libCache, libs);
+            decomped = getDecompiledJar(cache, version, joined, libCache, libs);
         }
 
 
@@ -661,45 +683,10 @@ public class Generator implements AutoCloseable {
         return ret;
     }
 
-    private Path getRenamedJar(Path cache, Path joined, Path mappings, Path libCache, List<Path> libs) throws IOException {
-        var key = new Cache()
-            .put(Tools.ART, this.depCache)
-            .put("joined", joined)
-            .put("map", mappings);
-
-        for (var lib : libs) {
-            var relative = libCache.relativize(lib);
-            key.put(relative.toString(), lib);
-        }
-
-        var keyF = cache.resolve("joined-renamed.jar.cache");
-        var ret = cache.resolve("joined-renamed.jar");
-
-        if (!Files.exists(ret) || !key.isValid(keyF)) {
-            LOGGER.debug("  Renaming joined jar");
-            var builder = Renamer.builder()
-                .map(mappings.toFile())
-                .add(Transformer.parameterAnnotationFixerFactory())
-                .add(Transformer.identifierFixerFactory(IdentifierFixerConfig.ALL))
-                .add(Transformer.sourceFixerFactory(SourceFixerConfig.JAVA))
-                .add(Transformer.recordFixerFactory())
-                .add(Transformer.signatureStripperFactory(SignatureStripperConfig.ALL))
-                .add(Transformer.parameterFinalFlagRemoverFactory())
-                .logger(s -> {});
-            libs.forEach(l -> builder.lib(l.toFile()));
-            try (final var renamer = builder.build()) {
-                renamer.run(joined.toFile(), ret.toFile());
-            }
-
-            key.write(keyF);
-        }
-
-        return ret;
-    }
-
     private Path getDecompiledJar(Path cache, Version version, Path renamed, Path libCache, List<Path> libs) throws IOException {
         var key = new Cache()
             .put(Tools.VINEFLOWER, this.depCache)
+            .put(Tools.VINEFLOWER_PLUGINS, this.depCache)
             .put("renamed", renamed);
 
         if (partialCache) {
@@ -720,7 +707,7 @@ public class Generator implements AutoCloseable {
         var ret = cache.resolve("joined-decompiled.jar");
 
         if (!Files.exists(ret) || !key.isValid(keyF)) {
-            LOGGER.debug("  Decompiling joined-renamed.jar");
+            LOGGER.debug("  Decompiling joined.jar");
             var cfg = cache.resolve("joined-libraries.cfg");
             Util.writeLines(cfg, libs.stream().map(l -> "-e=" + l.toString()).toArray(String[]::new));
 

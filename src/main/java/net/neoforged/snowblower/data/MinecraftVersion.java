@@ -18,12 +18,15 @@ public record MinecraftVersion(Type type, String version) {
     private static final Pattern OLD_SNAPSHOT = Pattern.compile("\\d{2}w\\d{2}[a-z]");
     private static final Pattern PRE_RC = Pattern.compile(RELEASE.pattern() + "(?: Pre-Release |-rc|-pre)\\d+");
 
-    public static MinecraftVersion from(String version) {
+    public static MinecraftVersion from(final String version) {
         Type type = Type.SPECIAL;
+        String versionToCheck = version;
+        if (versionToCheck.endsWith("_unobfuscated"))
+            versionToCheck = versionToCheck.substring(0, versionToCheck.length() - "_unobfuscated".length());
 
-        if (NEW_SNAPSHOT.matcher(version).matches() || PRE_RC.matcher(version).matches() || OLD_SNAPSHOT.matcher(version).matches()) {
+        if (NEW_SNAPSHOT.matcher(versionToCheck).matches() || PRE_RC.matcher(versionToCheck).matches() || OLD_SNAPSHOT.matcher(versionToCheck).matches()) {
             type = Type.SNAPSHOT;
-        } else if (RELEASE.matcher(version).matches()) {
+        } else if (RELEASE.matcher(versionToCheck).matches()) {
             type = Type.RELEASE;
         }
 

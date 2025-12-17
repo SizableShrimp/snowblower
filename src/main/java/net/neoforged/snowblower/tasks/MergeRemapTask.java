@@ -5,29 +5,31 @@
 package net.neoforged.snowblower.tasks;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
-import net.neoforged.mergetool.AnnotationVersion;
-import net.neoforged.mergetool.Merger;
+import net.neoforged.installertools.ProcessMinecraftJar;
 import net.neoforged.snowblower.data.Version;
 import net.neoforged.snowblower.util.Cache;
 import net.neoforged.snowblower.util.DependencyHashCache;
 import net.neoforged.snowblower.util.Tools;
 import net.neoforged.snowblower.util.Util;
-import net.neoforged.srgutils.IMappingFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class MergeTask {
-    private static final Logger LOGGER = LoggerFactory.getLogger(MergeTask.class);
+public class MergeRemapTask {
+    private static final Logger LOGGER = LoggerFactory.getLogger(MergeRemapTask.class);
 
-    public static Path getJoinedJar(Path cache, Version version, Path mappings, DependencyHashCache depCache, boolean partialCache) throws IOException {
+    public static Path getJoinedRemappedJar(Path cache, Version version, Path mappings, DependencyHashCache depCache, boolean partialCache) throws IOException {
         var keyF = cache.resolve("joined.jar.cache");
         var joinedJar = cache.resolve("joined.jar");
         if (partialCache && Files.exists(joinedJar) && Files.exists(keyF)) {
             var key = new Cache()
-                    .put(Tools.MERGETOOL, depCache)
+                    .put(Tools.INSTALLERTOOLS, depCache)
                     .put("client", getSha("client", version))
                     .put("server-full", getSha("server", version))
                     .put("map", mappings);
@@ -42,24 +44,34 @@ public class MergeTask {
         var serverJar = BundlerExtractTask.getExtractedServerJar(cache, serverFullJar, depCache);
 
         var key = new Cache()
-            .put(Tools.MERGETOOL, depCache)
-            .put("client", clientJar)
-            .put("server", serverJar)
-            .put("server-full", serverFullJar)
-            .put("map", mappings);
+                .put(Tools.INSTALLERTOOLS, depCache)
+                .put("client", clientJar)
+                .put("server", serverJar)
+                .put("server-full", serverFullJar)
+                .put("map", mappings);
 
         if (!Files.exists(joinedJar) || !key.isValid(keyF)) {
-            LOGGER.debug("  Merging client and server jars");
-            Merger merger = new Merger(clientJar.toFile(), serverJar.toFile(), joinedJar.toFile());
+            LOGGER.debug("  Merging client and server jars and remapping");
+            List<String> args = new ArrayList<>(List.of(
+                    "--input", clientJar.toString(),
+                    "--input", serverJar.toString(),
+                    "--output", joinedJar.toString(),
+                    "--no-mod-manifest",
+                    "--no-dist-annotations" // Avoid using ASM to process; the dist annotations are very minor for Snowblower's purposes
+            ));
             if (mappings != null) {
-                // Whitelist only Mojang classes to process
-                var map = IMappingFile.load(mappings.toFile());
-                map.getClasses().forEach(cls -> merger.whitelist(cls.getOriginal()));
+                args.add("--input-mappings");
+                args.add(mappings.toString());
             }
-            merger.annotate(AnnotationVersion.API, true);
-            merger.keepData();
-            merger.skipMeta();
-            merger.process();
+
+            var stdout = System.out;
+            try (var ps = new PrintStream(OutputStream.nullOutputStream())) {
+                System.setOut(ps); // Turn off installertools log output
+
+                new ProcessMinecraftJar().process(args.toArray(String[]::new));
+            } finally {
+                System.setOut(stdout);
+            }
 
             key.write(keyF);
         }
@@ -88,7 +100,7 @@ public class MergeTask {
         // Should we detect/notify about this somehow?
         // Plus it's faster to use the existing string instead of hashing a file.
         var key = new Cache()
-            .put(type, dl.sha1());
+                .put(type, dl.sha1());
 
         if (!Files.exists(jar) || !key.isValid(keyF)) {
             try {

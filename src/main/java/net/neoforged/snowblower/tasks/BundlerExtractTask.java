@@ -52,9 +52,13 @@ public class BundlerExtractTask {
         if (!Files.exists(extractedServerJar) || !key.isValid(keyF)) {
             LOGGER.debug("  Extracting server jar");
             var stdout = System.out;
-            System.setOut(new PrintStream(OutputStream.nullOutputStream())); // We turn off stdout to remove installer tools printing garbage
-            new BundlerExtract().process(new String[]{"--input", serverJar.toString(), "--output", extractedServerJar.toString(), "--jar-only"});
-            System.setOut(stdout);
+            try (var ps = new PrintStream(OutputStream.nullOutputStream())) {
+                System.setOut(ps); // Turn off installertools log output
+
+                new BundlerExtract().process(new String[]{"--input", serverJar.toString(), "--output", extractedServerJar.toString(), "--jar-only"});
+            } finally {
+                System.setOut(stdout);
+            }
 
             key.write(keyF);
         }

@@ -44,7 +44,7 @@ public class Main {
         var checkoutO = parser.accepts("checkout", "Whether to checkout the remote branch (if it exists) before generating").availableIf("remote");
         var pushO = parser.accepts("push", "Whether to push the branch to the remote once finished").availableIf("remote");
         var committerO = parser.accepts("committer", "The name and email of the user to use as the committer, separated by a space. If omitted, defaults to snowforge").withRequiredArg();
-        var partialCache = parser.accepts("partial-cache", "If true, the cache will be partial, meaning that the server and client jar will be deleted, leaving only the joined jar. The SHA in the version manifest will be used to determine whether the joined jar should be remade");
+        var partialCacheO = parser.accepts("partial-cache", "If true, the cache will be partial, meaning that the server and client jar will be deleted, leaving only the joined jar. The SHA in the version manifest will be used to determine whether the joined jar should be remade");
         
         var excludeO = parser.accepts("exclude", "A glob pattern (see FileSystem#getPathMatcher) for excluding files from the output").withRequiredArg().ofType(String.class);
         var includeO = parser.accepts("include", "A glob pattern (see FileSystem#getPathMatcher) for including only specified files from the output").withRequiredArg().ofType(String.class);
@@ -82,7 +82,7 @@ public class Main {
         Path extraMappingsPath = extraMappings == null ? null : extraMappings.toPath();
         boolean startOver = options.has(startOverO);
         boolean startOverIfRequired = !startOver && options.has(startOverIfRequiredO);
-        boolean partialCachce = options.has(partialCache);
+        boolean partialCache = options.has(partialCacheO);
         URIish remote = options.has(remoteO) ? options.valueOf(remoteO) : null;
         boolean checkout = options.has(checkoutO);
         boolean push = options.has(pushO);
@@ -124,7 +124,7 @@ public class Main {
         }
 
         try (var gen = new Generator(output.toPath(), cachePath, extraMappingsPath, depCache, includes, excludes)) {
-            gen.setup(branchName, remote, checkout, push, cfg, cliBranch, startOver, startOverIfRequired, partialCachce);
+            gen.setup(branchName, remote, checkout, push, cfg, cliBranch, startOver, startOverIfRequired, partialCache);
             gen.run();
         }
     }

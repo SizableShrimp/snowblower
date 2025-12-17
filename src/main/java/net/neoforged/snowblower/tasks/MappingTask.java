@@ -49,18 +49,17 @@ public class MappingTask {
             // Should we add code version? I don't think it matters much for this one.
             .put("client", clientMojToObf == null ? null : cache.resolve("client_mappings.txt"))
             .put("server", serverMojToObf == null ? null : cache.resolve("server_mappings.txt"));
-        var keyF = cache.resolve("obf_to_moj.tsrg.cache");
-        var ret = cache.resolve("obf_to_moj.tsrg");
+        var keyF = cache.resolve("moj_to_obf.tsrg.cache");
+        var ret = cache.resolve("moj_to_obf.tsrg");
 
         if (!Files.exists(ret) || !key.isValid(keyF)) {
             var mappingsToWrite = clientMojToObf != null ? clientMojToObf : serverMojToObf;
-            mappingsToWrite.write(ret, IMappingFile.Format.TSRG2, true);
+            mappingsToWrite.write(ret, IMappingFile.Format.TSRG2, false);
             key.write(keyF);
         }
 
         return ret;
     }
-
 
     private static IMappingFile downloadMappings(Path cache, Path extraMappings, Version version, boolean unobfuscated, String type) throws IOException {
         var mappings = cache.resolve(type + "_mappings.txt");
