@@ -10,6 +10,8 @@ import net.neoforged.snowblower.data.MinecraftVersion;
 import net.neoforged.snowblower.data.Version;
 import net.neoforged.snowblower.data.VersionManifestV2;
 import net.neoforged.snowblower.data.VersionManifestV2.VersionInfo;
+import net.neoforged.snowblower.tasks.DecompileTask;
+import net.neoforged.snowblower.tasks.DeduplicateTask;
 import net.neoforged.snowblower.tasks.MappingTask;
 import net.neoforged.snowblower.tasks.MergeRemapTask;
 import net.neoforged.snowblower.tasks.enhance.EnhanceVersionTask;
@@ -33,9 +35,9 @@ import org.eclipse.jgit.transport.RemoteConfig;
 import org.eclipse.jgit.transport.RemoteRefUpdate;
 import org.eclipse.jgit.transport.URIish;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.java.decompiler.main.decompiler.ConsoleDecompiler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.io.IOException;
 import java.io.OutputStreamWriter;
@@ -61,6 +63,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
+import java.util.zip.ZipException;
 
 public class Generator implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(Generator.class);
@@ -86,20 +89,6 @@ public class Generator implements AutoCloseable {
     private boolean removeRemote;
     private boolean freshIfRequired;
     private boolean partialCache;
-    private final String[] decompileArgs = new String[]{
-            // For comparison, see NeoForm parameters for 26.1-snapshot-1 here:
-            // https://github.com/neoforged/NeoForm/blob/64142f5933f3e68a0d73abc60f1672b1ec90d17a/settings.gradle#L36-L51
-            "--decompile-inner",
-            "--remove-bridge",
-            "--decompile-generics",
-            "--ascii-strings",
-            "--remove-synthetic",
-            "--include-classpath",
-            "--ignore-invalid-bytecode",
-            "--bytecode-source-mapping",
-            "--indent-string=    ",
-            "--dump-code-lines"
-    };
 
     public Generator(Path output, Path cache, Path extraMappings, DependencyHashCache depCache, List<String> includes, List<String> excludes) {
         this.output = output.toAbsolutePath().normalize();
@@ -258,6 +247,23 @@ public class Generator implements AutoCloseable {
         // Sorted from newest at index 0 to oldest at the end of the list
         var versions = new ArrayList<>(Arrays.asList(manifest.versions()));
 
+        int idx1_21_11 = -1;
+        for (int i = 0; i < versions.size(); i++) {
+            var versionInfo = versions.get(i);
+            if (VER1_21_11.equals(versionInfo.id())) {
+                idx1_21_11 = i;
+                break;
+            }
+        }
+
+        // After 1.21.11, add "1.21.11_unobfuscated" so that we get a cleaner diff with versions that come later,
+        // since versions past 1.21.11 are unobfuscated and preserve the LVT names.
+        // Using the LVT, the decompiled output will have the original names for all parameters and local variables.
+        if (idx1_21_11 != -1) {
+            // Insert the unobfuscated version where the obfuscated version currently is so that it is counted as newer.
+            versions.add(idx1_21_11, VER1_21_11_UNOBFUSCATED_INFO);
+        }
+
         var targetVer = this.branch.end();
         // If we have explicit filters, apply them
         if (this.branch.versions() != null) {
@@ -339,23 +345,6 @@ public class Generator implements AutoCloseable {
         if (this.branch.type().equals("release"))
             toGenerate.removeIf(v -> !v.type().equals("release"));
 
-        int idx1_21_11 = -1;
-        for (int i = 0; i < toGenerate.size(); i++) {
-            var versionInfo = toGenerate.get(i);
-            if (VER1_21_11.equals(versionInfo.id())) {
-                idx1_21_11 = i;
-                break;
-            }
-        }
-
-        // If we are generating 1.21.11, add "1.21.11_unobfuscated" so that we get a cleaner diff with whatever
-        // version comes after 1.21.11, since versions past 1.21.11 are unobfuscated and preserve the LVT.
-        // Using the LVT, the decompiled output will have the original names for all parameters and local variables.
-        if (idx1_21_11 != -1) {
-            // Insert the unobfuscated version where the obfuscated version currently is so that it is counted as newer.
-            toGenerate.add(idx1_21_11, VER1_21_11_UNOBFUSCATED_INFO);
-        }
-
         // Reverse so it's in oldest first
         Collections.reverse(toGenerate);
 
@@ -388,8 +377,14 @@ public class Generator implements AutoCloseable {
             Files.createDirectories(versionCache);
 
             LOGGER.info("[{}, {}] Generating {}", x + 1, toGenerate.size(), versionInfo.id());
-            var version = Version.load(versionCache.resolve("version.json"));
-            generate(git, output, versionCache, libs, version, extraMappings, depCache);
+            try {
+                MDC.put("mcver", " [" + versionInfo.id() + "]");
+
+                var version = Version.load(versionCache.resolve("version.json"));
+                generate(versionCache, libs, version);
+            } finally {
+                MDC.remove("mcver");
+            }
 
             if (x % COMMIT_BATCH_SIZE == (COMMIT_BATCH_SIZE - 1)) { // Push every X versions
                 attemptPush("Pushing " + COMMIT_BATCH_SIZE + " versions to remote.");
@@ -537,7 +532,7 @@ public class Generator implements AutoCloseable {
         return null;
     }
 
-    private void generate(Git git, Path output, Path cache, Path libCache, Version version, Path extraMappings, DependencyHashCache depCache) throws IOException, GitAPIException {
+    private void generate(Path cache, Path libCache, Version version) throws IOException, GitAPIException {
         Path decomped = null;
         if (partialCache) {
             var decompJar = cache.resolve("joined-decompiled.jar");
@@ -551,11 +546,11 @@ public class Generator implements AutoCloseable {
                         .put("downloads-server", version.downloads().get("server").sha1())
                         .put("downloads-server", version.downloads().get("server_mappings").sha1());
 
-                key.put("decompileArgs", String.join(" ", decompileArgs));
+                key.put("decompileArgs", String.join(" ", DecompileTask.DECOMPILE_ARGS));
 
                 if (key.isValid(keyF, str -> str.equals(Tools.VINEFLOWER) || str.equals(Tools.VINEFLOWER_PLUGINS) || str.equals("decompileArgs") || str.startsWith("downloads-"))) {
                     decomped = decompJar;
-                    LOGGER.debug("  Decompiled jar partial cache hit");
+                    LOGGER.debug("Decompiled jar partial cache hit");
                 }
             }
         }
@@ -566,8 +561,41 @@ public class Generator implements AutoCloseable {
                 return;
 
             var joined = MergeRemapTask.getJoinedRemappedJar(cache, version, mappings, depCache, partialCache);
+
             var libs = getLibraries(libCache, version);
-            decomped = getDecompiledJar(cache, version, joined, libCache, libs);
+            var decompKey = DecompileTask.getKey(version, joined, libCache, libs, depCache, partialCache);
+            var decompKeyF = cache.resolve("joined-decompiled.jar.cache");
+            decomped = cache.resolve("joined-decompiled.jar");
+
+            boolean reuseDecomp = Files.exists(decomped) && decompKey.isValid(decompKeyF);
+
+            if (reuseDecomp) {
+                try (FileSystem zipFs = FileSystems.newFileSystem(decomped)) {} catch (ZipException e) {
+                    reuseDecomp = false; // Catch exceptions like "zip END header not found" and just regenerate
+                }
+            }
+
+            if (!reuseDecomp) {
+                var dedupeResult = DeduplicateTask.deduplicateJar(this.cache, cache, joined, this.depCache);
+
+                try {
+                    DecompileTask.decompileJar(cache, libs, dedupeResult.deduplicatedJar(), dedupeResult.duplicatesJar(), decomped);
+
+                    DeduplicateTask.cacheDecompilation(this.cache, dedupeResult.deduplicatedJar(), decomped, this.depCache);
+
+                    DeduplicateTask.merge(decomped, dedupeResult);
+                } finally {
+                    // TODO: Uncomment
+                    // if (dedupeResult.deduplicatedJar() != joined)
+                    //     Files.deleteIfExists(dedupeResult.deduplicatedJar());
+                    // if (dedupeResult.duplicatesJar() != null)
+                    //     Files.deleteIfExists(dedupeResult.duplicatesJar());
+                    // if (dedupeResult.duplicatesDecompiledJar() != null)
+                    //     Files.deleteIfExists(dedupeResult.duplicatesDecompiledJar());
+                }
+
+                decompKey.write(decompKeyF);
+            }
         }
 
 
@@ -585,6 +613,41 @@ public class Generator implements AutoCloseable {
         List<Path> added = new ArrayList<>();
         List<Path> removed = new ArrayList<>();
 
+        walkDecomp(decomped, java, resources, existingFiles, removed, added);
+
+        var enhanced = EnhanceVersionTask.enhance(output, version);
+        existingFiles.removeAll(enhanced);
+        added.addAll(enhanced);
+
+        existingFiles.stream().sorted().forEach(p -> {
+            try {
+                Files.delete(p);
+                removed.add(p);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        if (!added.isEmpty() || !removed.isEmpty()) {
+            LOGGER.debug("Committing files");
+            Function<Path, String> convert = p -> output.relativize(p).toString().replace('\\', '/'); // JGit requires / even on windows
+
+            if (!added.isEmpty()) {
+                var add = git.add();
+                added.stream().map(convert).forEach(add::addFilepattern);
+                add.call();
+            }
+            if (!removed.isEmpty()) {
+                var rm = git.rm();
+                removed.stream().map(convert).forEach(rm::addFilepattern);
+                rm.call();
+            }
+            Util.commit(git, version.id().toString(), version.releaseTime());
+        }
+    }
+
+    private void walkDecomp(Path decomped, Path java, Path resources, Set<Path> existingFiles,
+            List<Path> removed, List<Path> added) throws IOException {
         try (FileSystem zipFs = FileSystems.newFileSystem(decomped)) {
             var matcher = createMatcher(zipFs, includes, excludes);
             var root = zipFs.getPath("/");
@@ -628,39 +691,9 @@ public class Generator implements AutoCloseable {
                 });
             }
         }
-
-        var enhanced = EnhanceVersionTask.enhance(output, version);
-        existingFiles.removeAll(enhanced);
-        added.addAll(enhanced);
-
-        existingFiles.stream().sorted().forEach(p -> {
-            try {
-                Files.delete(p);
-                removed.add(p);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        });
-
-        if (!added.isEmpty() || !removed.isEmpty()) {
-            LOGGER.debug("  Committing files");
-            Function<Path, String> convert = p -> output.relativize(p).toString().replace('\\', '/'); // JGit requires / even on windows
-
-            if (!added.isEmpty()) {
-                var add = git.add();
-                added.stream().map(convert).forEach(add::addFilepattern);
-                add.call();
-            }
-            if (!removed.isEmpty()) {
-                var rm = git.rm();
-                removed.stream().map(convert).forEach(rm::addFilepattern);
-                rm.call();
-            }
-            Util.commit(git, version.id().toString(), version.releaseTime());
-        }
     }
 
-    private List<Path> getLibraries(Path cache, Version version) throws IOException {
+    private static List<Path> getLibraries(Path cache, Version version) throws IOException {
         if (version.libraries() == null)
             return Collections.emptyList();
 
@@ -679,46 +712,6 @@ public class Generator implements AutoCloseable {
             }
 
             ret.add(target);
-        }
-        return ret;
-    }
-
-    private Path getDecompiledJar(Path cache, Version version, Path renamed, Path libCache, List<Path> libs) throws IOException {
-        var key = new Cache()
-            .put(Tools.VINEFLOWER, this.depCache)
-            .put(Tools.VINEFLOWER_PLUGINS, this.depCache)
-            .put("renamed", renamed);
-
-        if (partialCache) {
-            key.put("downloads-client", version.downloads().get("client").sha1());
-            key.put("downloads-client_mappings", version.downloads().get("client_mappings").sha1());
-            key.put("downloads-server", version.downloads().get("server").sha1());
-            key.put("downloads-server", version.downloads().get("server_mappings").sha1());
-        }
-
-        key.put("decompileArgs", String.join(" ", decompileArgs));
-
-        for (var lib : libs) {
-            var relative = libCache.relativize(lib);
-            key.put(relative.toString(), lib);
-        }
-
-        var keyF = cache.resolve("joined-decompiled.jar.cache");
-        var ret = cache.resolve("joined-decompiled.jar");
-
-        if (!Files.exists(ret) || !key.isValid(keyF)) {
-            LOGGER.debug("  Decompiling joined.jar");
-            var cfg = cache.resolve("joined-libraries.cfg");
-            Util.writeLines(cfg, libs.stream().map(l -> "-e=" + l.toString()).toArray(String[]::new));
-
-            ConsoleDecompiler.main(Stream.concat(Arrays.stream(decompileArgs), Stream.of(
-                "-log=ERROR", // IFernflowerLogger.Severity
-                "-cfg", cfg.toString(),
-                renamed.toString(),
-                ret.toString()
-            )).toArray(String[]::new));
-
-            key.write(keyF);
         }
         return ret;
     }

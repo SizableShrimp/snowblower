@@ -115,7 +115,7 @@ public class Util {
     }
 
     private static <T> HttpResponse<T> download(URL url, Supplier<HttpResponse.BodyHandler<T>> bodyHandlerFactory) throws IOException {
-        LOGGER.debug("  Downloading " + url);
+        LOGGER.debug("Downloading " + url);
         int maxAttempts = 10;
         int attempts = 1;
         long waitTime = 1_000L;

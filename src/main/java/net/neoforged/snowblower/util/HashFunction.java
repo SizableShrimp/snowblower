@@ -71,6 +71,16 @@ public enum HashFunction {
         return pad(new BigInteger(1, hash.digest()).toString(16));
     }
 
+    public String hashPaths(Iterable<Path> paths) throws IOException {
+        MessageDigest hash = get();
+
+        for (Path path : paths) {
+            hash.update(Files.readAllBytes(path));
+        }
+
+        return pad(new BigInteger(1, hash.digest()).toString(16));
+    }
+
     public String hash(String data) {
         return hash(data == null ? new byte[0] : data.getBytes(StandardCharsets.UTF_8));
     }
