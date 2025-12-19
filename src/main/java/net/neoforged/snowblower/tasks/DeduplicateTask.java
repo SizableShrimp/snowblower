@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,7 +34,10 @@ public class DeduplicateTask {
      * Together, the first 2 jars exactly partition the entries of the original jar.
      * If the class map does not exist, only the deduplicate jar will exist, and the other 2 entries will be {@code null}.
      */
-    public static DeduplicationResult deduplicateJar(Path rootCache, Path versionCache, Path inputJar, DependencyHashCache depCache) throws IOException {
+    public static DeduplicationResult deduplicateJar(boolean noClassMap, Path rootCache, Path versionCache, Path inputJar, DependencyHashCache depCache) throws IOException {
+        if (noClassMap)
+            return new DeduplicationResult(inputJar, null, null);
+
         var key = getKey(depCache);
 
         Path dedupedJar = versionCache.resolve(inputJar.getFileName().toString().replace(".jar", "-deduplicated.jar"));
@@ -88,6 +92,8 @@ public class DeduplicateTask {
                 }
             }
 
+            sortClasses(topLevelClasses);
+
             for (var entry : topLevelClasses.entrySet()) {
                 String topLevelClassname = entry.getKey();
                 List<Path> thisAndSubClasses = entry.getValue();
@@ -95,16 +101,6 @@ public class DeduplicateTask {
                 String javaFilename = javaPath.substring(javaPath.lastIndexOf('/') + 1);
 
                 String sha1 = HashFunction.SHA1.hashPaths(thisAndSubClasses);
-
-                // TODO: Delete this
-                if ("0a1ce03ee295bf554611de1c5ece06535036547b".equals(sha1)) {
-                    boolean b = false;
-                }
-
-                // TODO: The class reusing is not working for 1.21.11_unobfuscated <-> 26.1-snapshot-1
-                if ("DismountOrSkipMounting.java".equals(javaFilename)) {
-                    boolean b = false;
-                }
 
                 Path cachedPath = getCachedPath(classMapFs, sha1, javaFilename);
 
@@ -136,7 +132,17 @@ public class DeduplicateTask {
         topLevelClasses.computeIfAbsent(topLevelClassname, k -> new ArrayList<>()).add(path);
     }
 
-    public static void cacheDecompilation(Path rootCache, Path compiledJar, Path decompiledJar, DependencyHashCache depCache) throws IOException {
+    private static void sortClasses(Map<String, List<Path>> topLevelClasses) {
+        for (List<Path> thisAndSubClasses : topLevelClasses.values()) {
+            thisAndSubClasses.sort(Comparator.comparing(Path::toString));
+        }
+    }
+
+    public static void cacheDecompilation(boolean noClassMap, Path rootCache, Path compiledJar, Path decompiledJar, DependencyHashCache depCache) throws IOException {
+        // TODO: Delete this
+        if (noClassMap)
+            return;
+
         Files.createDirectories(rootCache);
 
         var key = getKey(depCache);
@@ -161,6 +167,8 @@ public class DeduplicateTask {
                 }
             }
 
+            sortClasses(topLevelClasses);
+
             for (var entry : topLevelClasses.entrySet()) {
                 String topLevelClassname = entry.getKey();
                 List<Path> thisAndSubClasses = entry.getValue();
@@ -172,11 +180,6 @@ public class DeduplicateTask {
 
                 String javaFilename = javaPathStr.substring(javaPathStr.lastIndexOf('/') + 1);
                 String sha1 = HashFunction.SHA1.hashPaths(thisAndSubClasses);
-
-                // TODO: Delete this
-                if ("DismountOrSkipMounting.java".equals(javaFilename)) {
-                    boolean b = false;
-                }
 
                 Path cachedPath = getCachedPath(classMapFs, sha1, javaFilename);
 
@@ -190,8 +193,8 @@ public class DeduplicateTask {
         key.write(keyF);
     }
 
-    public static void merge(Path decompJar, DeduplicationResult dedupeResult) throws IOException {
-        if (dedupeResult.duplicatesDecompiledJar() == null || !Files.exists(dedupeResult.duplicatesDecompiledJar()))
+    public static void merge(boolean noClassMap, Path decompJar, DeduplicationResult dedupeResult) throws IOException {
+        if (noClassMap || dedupeResult.duplicatesDecompiledJar() == null || !Files.exists(dedupeResult.duplicatesDecompiledJar()))
             return;
 
         try (var decompFs = FileSystems.newFileSystem(decompJar);

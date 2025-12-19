@@ -89,6 +89,7 @@ public class Generator implements AutoCloseable {
     private boolean removeRemote;
     private boolean freshIfRequired;
     private boolean partialCache;
+    private boolean noClassMap;
 
     public Generator(Path output, Path cache, Path extraMappings, DependencyHashCache depCache, List<String> includes, List<String> excludes) {
         this.output = output.toAbsolutePath().normalize();
@@ -100,7 +101,7 @@ public class Generator implements AutoCloseable {
     }
 
     public Generator setup(String branchName, @Nullable URIish remoteUrl, boolean checkout, boolean push, Config cfg, BranchSpec cliBranch,
-            boolean fresh, boolean freshIfRequired, boolean partialCache) throws IOException, GitAPIException {
+            boolean fresh, boolean freshIfRequired, boolean partialCache, boolean noClassMap) throws IOException, GitAPIException {
         try {
             this.git = Git.open(this.output.toFile());
         } catch (RepositoryNotFoundException e) { // I wish there was a better way to detect if it exists/is init
@@ -116,6 +117,7 @@ public class Generator implements AutoCloseable {
         this.push = push;
         this.freshIfRequired = freshIfRequired;
         this.partialCache = partialCache;
+        this.noClassMap = noClassMap;
 
         branchName = setupBranch(branchName, fresh);
 
@@ -576,22 +578,22 @@ public class Generator implements AutoCloseable {
             }
 
             if (!reuseDecomp) {
-                var dedupeResult = DeduplicateTask.deduplicateJar(this.cache, cache, joined, this.depCache);
+                var dedupeResult = DeduplicateTask.deduplicateJar(this.noClassMap, this.cache, cache, joined, this.depCache);
 
                 try {
                     DecompileTask.decompileJar(cache, libs, dedupeResult.deduplicatedJar(), dedupeResult.duplicatesJar(), decomped);
 
-                    DeduplicateTask.cacheDecompilation(this.cache, dedupeResult.deduplicatedJar(), decomped, this.depCache);
+                    // TODO: If class map is enabled, delete decompiled jar, since we can easily reconstruct it using the global class map?
+                    DeduplicateTask.cacheDecompilation(this.noClassMap, this.cache, dedupeResult.deduplicatedJar(), decomped, this.depCache);
 
-                    DeduplicateTask.merge(decomped, dedupeResult);
+                    DeduplicateTask.merge(this.noClassMap, decomped, dedupeResult);
                 } finally {
-                    // TODO: Uncomment
-                    // if (dedupeResult.deduplicatedJar() != joined)
-                    //     Files.deleteIfExists(dedupeResult.deduplicatedJar());
-                    // if (dedupeResult.duplicatesJar() != null)
-                    //     Files.deleteIfExists(dedupeResult.duplicatesJar());
-                    // if (dedupeResult.duplicatesDecompiledJar() != null)
-                    //     Files.deleteIfExists(dedupeResult.duplicatesDecompiledJar());
+                    if (dedupeResult.deduplicatedJar() != joined)
+                        Files.deleteIfExists(dedupeResult.deduplicatedJar());
+                    if (dedupeResult.duplicatesJar() != null)
+                        Files.deleteIfExists(dedupeResult.duplicatesJar());
+                    if (dedupeResult.duplicatesDecompiledJar() != null)
+                        Files.deleteIfExists(dedupeResult.duplicatesDecompiledJar());
                 }
 
                 decompKey.write(decompKeyF);

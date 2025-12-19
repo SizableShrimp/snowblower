@@ -39,6 +39,7 @@ public class Main {
         var releasesOnlyO = parser.accepts("releases-only", "When set, only release versions will be considered");
         var startOverO = parser.accepts("start-over", "Whether to start over by deleting the target branch");
         var startOverIfRequiredO = parser.accepts("start-over-if-required", "Whether to start over by deleting the target branch, only if it is necessary to do so").availableUnless("start-over");
+        var noClassMapO = parser.accepts("no-class-map", "If set, will disable the global class map that caches decompiled files to speed up decompilations of subsequent versions");
         var configO = parser.accepts("cfg", "Config file for SnowBlower").withRequiredArg().ofType(URI.class);
         var remoteO = parser.accepts("remote", "The URL of the Git remote to use").withRequiredArg().ofType(URIish.class);
         var checkoutO = parser.accepts("checkout", "Whether to checkout the remote branch (if it exists) before generating").availableIf("remote");
@@ -83,6 +84,7 @@ public class Main {
         boolean startOver = options.has(startOverO);
         boolean startOverIfRequired = !startOver && options.has(startOverIfRequiredO);
         boolean partialCache = options.has(partialCacheO);
+        boolean noClassMap = options.has(noClassMapO);
         URIish remote = options.has(remoteO) ? options.valueOf(remoteO) : null;
         boolean checkout = options.has(checkoutO);
         boolean push = options.has(pushO);
@@ -124,7 +126,7 @@ public class Main {
         }
 
         try (var gen = new Generator(output.toPath(), cachePath, extraMappingsPath, depCache, includes, excludes)) {
-            gen.setup(branchName, remote, checkout, push, cfg, cliBranch, startOver, startOverIfRequired, partialCache);
+            gen.setup(branchName, remote, checkout, push, cfg, cliBranch, startOver, startOverIfRequired, partialCache, noClassMap);
             gen.run();
         }
     }
