@@ -50,7 +50,7 @@ public class BundlerExtractTask {
         var extractedServerJar = cache.resolve("server-extracted.jar");
 
         if (!Files.exists(extractedServerJar) || !key.isValid(keyF)) {
-            LOGGER.debug("  Extracting server jar");
+            LOGGER.debug("Extracting server jar");
             var stdout = System.out;
             try (var ps = new PrintStream(OutputStream.nullOutputStream())) {
                 System.setOut(ps); // Turn off installertools log output

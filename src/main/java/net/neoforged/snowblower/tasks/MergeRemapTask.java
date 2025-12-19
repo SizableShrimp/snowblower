@@ -34,7 +34,7 @@ public class MergeRemapTask {
                     .put("server-full", getSha("server", version))
                     .put("map", mappings);
             if (key.isValid(keyF, k -> !k.equals("server"))) {
-                LOGGER.debug("  Hitting cache for joined jar");
+                LOGGER.debug("Hitting cache for joined jar");
                 return joinedJar;
             }
         }
@@ -51,7 +51,7 @@ public class MergeRemapTask {
                 .put("map", mappings);
 
         if (!Files.exists(joinedJar) || !key.isValid(keyF)) {
-            LOGGER.debug("  Merging client and server jars and remapping");
+            LOGGER.debug("Merging client and server jars and remapping");
             List<String> args = new ArrayList<>(List.of(
                     "--input", clientJar.toString(),
                     "--input", serverJar.toString(),

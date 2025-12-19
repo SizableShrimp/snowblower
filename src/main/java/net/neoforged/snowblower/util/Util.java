@@ -52,6 +52,7 @@ public class Util {
         .connectTimeout(Duration.of(5, ChronoUnit.SECONDS))
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build();
+    public static final long MAX_REQUEST_WAIT_MS = 64_000L;
     public static PersonIdent COMMITTER = new PersonIdent("snowforge[bot]", "127516132+snowforge[bot]@users.noreply.github.com");
 
     public static boolean isDev() {
@@ -115,7 +116,7 @@ public class Util {
     }
 
     private static <T> HttpResponse<T> download(URL url, Supplier<HttpResponse.BodyHandler<T>> bodyHandlerFactory) throws IOException {
-        LOGGER.debug("  Downloading " + url);
+        LOGGER.debug("Downloading {}", url);
         int maxAttempts = 10;
         int attempts = 1;
         long waitTime = 1_000L;
@@ -142,7 +143,7 @@ public class Util {
 
             if (httpResponse == null || httpResponse.statusCode() != HttpURLConnection.HTTP_OK) {
                 if (attempts == maxAttempts) {
-                    String errorMessage = "    Failed to download " + url + " - exceeded max attempts of " + maxAttempts;
+                    String errorMessage = "Failed to download " + url + " - exceeded max attempts of " + maxAttempts;
                     if (ioException != null) {
                         throw new IOException(errorMessage, ioException);
                     } else if (httpResponse != null) {
@@ -153,13 +154,13 @@ public class Util {
                 }
 
                 String error = httpResponse == null ? Objects.toString(ioException) : "HTTP Response Code " + httpResponse.statusCode();
-                LOGGER.warn("    Failed to download, attempt: " + attempts + "/" + maxAttempts + ", error: " + error + ", retrying in " + waitTime + " ms...");
+                LOGGER.warn("Failed to download, attempt: {}/{}, error: {}, retrying in {} ms...", attempts, maxAttempts, error, waitTime);
                 try {
                     Thread.sleep(waitTime);
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
                 }
-                waitTime = Math.min(waitTime * ((long) Math.pow(2, attempts)), 64_000L);
+                waitTime = (waitTime >= MAX_REQUEST_WAIT_MS) ? MAX_REQUEST_WAIT_MS : waitTime * ((long) Math.pow(2, attempts));
 
                 attempts++;
 

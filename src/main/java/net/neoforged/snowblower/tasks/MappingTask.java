@@ -28,14 +28,14 @@ public class MappingTask {
         var clientMojToObf = downloadMappings(cache, extraMappings, version, unobfuscated, "client");
 
         if (!unobfuscated && clientMojToObf == null) {
-            LOGGER.debug("  Client mappings not found, skipping version");
+            LOGGER.debug("Client mappings not found, skipping version");
             return null;
         }
 
         var serverMojToObf = downloadMappings(cache, extraMappings, version, unobfuscated, "server");
 
         if (!unobfuscated && serverMojToObf == null) {
-            LOGGER.debug("  Server mappings not found, skipping version");
+            LOGGER.debug("Server mappings not found, skipping version");
             return null;
         }
 

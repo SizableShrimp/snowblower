@@ -36,6 +36,7 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.java.decompiler.main.decompiler.ConsoleDecompiler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.io.IOException;
 import java.io.OutputStreamWriter;
@@ -258,6 +259,25 @@ public class Generator implements AutoCloseable {
         // Sorted from newest at index 0 to oldest at the end of the list
         var versions = new ArrayList<>(Arrays.asList(manifest.versions()));
 
+        // TODO: Make generic for all "_unobfuscated" versions, and allow loading any one of them by explicit inclusion in the branch filters,
+        //  otherwise, default to excluded, but included in the version list.
+        int idx1_21_11 = -1;
+        for (int i = 0; i < versions.size(); i++) {
+            var versionInfo = versions.get(i);
+            if (VER1_21_11.equals(versionInfo.id())) {
+                idx1_21_11 = i;
+                break;
+            }
+        }
+
+        // After 1.21.11, add "1.21.11_unobfuscated" so that we get a cleaner diff with versions that come later,
+        // since versions past 1.21.11 are unobfuscated and preserve the LVT names.
+        // Using the LVT, the decompiled output will have the original names for all parameters and local variables.
+        if (idx1_21_11 != -1) {
+            // Insert the unobfuscated version where the obfuscated version currently is so that it is counted as newer.
+            versions.add(idx1_21_11, VER1_21_11_UNOBFUSCATED_INFO);
+        }
+
         var targetVer = this.branch.end();
         // If we have explicit filters, apply them
         if (this.branch.versions() != null) {
@@ -339,23 +359,6 @@ public class Generator implements AutoCloseable {
         if (this.branch.type().equals("release"))
             toGenerate.removeIf(v -> !v.type().equals("release"));
 
-        int idx1_21_11 = -1;
-        for (int i = 0; i < toGenerate.size(); i++) {
-            var versionInfo = toGenerate.get(i);
-            if (VER1_21_11.equals(versionInfo.id())) {
-                idx1_21_11 = i;
-                break;
-            }
-        }
-
-        // If we are generating 1.21.11, add "1.21.11_unobfuscated" so that we get a cleaner diff with whatever
-        // version comes after 1.21.11, since versions past 1.21.11 are unobfuscated and preserve the LVT.
-        // Using the LVT, the decompiled output will have the original names for all parameters and local variables.
-        if (idx1_21_11 != -1) {
-            // Insert the unobfuscated version where the obfuscated version currently is so that it is counted as newer.
-            toGenerate.add(idx1_21_11, VER1_21_11_UNOBFUSCATED_INFO);
-        }
-
         // Reverse so it's in oldest first
         Collections.reverse(toGenerate);
 
@@ -388,8 +391,14 @@ public class Generator implements AutoCloseable {
             Files.createDirectories(versionCache);
 
             LOGGER.info("[{}, {}] Generating {}", x + 1, toGenerate.size(), versionInfo.id());
-            var version = Version.load(versionCache.resolve("version.json"));
-            generate(git, output, versionCache, libs, version, extraMappings, depCache);
+            try {
+                MDC.put("mcver", " [" + versionInfo.id() + "]");
+
+                var version = Version.load(versionCache.resolve("version.json"));
+                generate(versionCache, libs, version);
+            } finally {
+                MDC.remove("mcver");
+            }
 
             if (x % COMMIT_BATCH_SIZE == (COMMIT_BATCH_SIZE - 1)) { // Push every X versions
                 attemptPush("Pushing " + COMMIT_BATCH_SIZE + " versions to remote.");
@@ -537,7 +546,7 @@ public class Generator implements AutoCloseable {
         return null;
     }
 
-    private void generate(Git git, Path output, Path cache, Path libCache, Version version, Path extraMappings, DependencyHashCache depCache) throws IOException, GitAPIException {
+    private void generate(Path cache, Path libCache, Version version) throws IOException, GitAPIException {
         Path decomped = null;
         if (partialCache) {
             var decompJar = cache.resolve("joined-decompiled.jar");
@@ -555,7 +564,7 @@ public class Generator implements AutoCloseable {
 
                 if (key.isValid(keyF, str -> str.equals(Tools.VINEFLOWER) || str.equals(Tools.VINEFLOWER_PLUGINS) || str.equals("decompileArgs") || str.startsWith("downloads-"))) {
                     decomped = decompJar;
-                    LOGGER.debug("  Decompiled jar partial cache hit");
+                    LOGGER.debug("Decompiled jar partial cache hit");
                 }
             }
         }
@@ -643,7 +652,7 @@ public class Generator implements AutoCloseable {
         });
 
         if (!added.isEmpty() || !removed.isEmpty()) {
-            LOGGER.debug("  Committing files");
+            LOGGER.debug("Committing files");
             Function<Path, String> convert = p -> output.relativize(p).toString().replace('\\', '/'); // JGit requires / even on windows
 
             if (!added.isEmpty()) {
@@ -707,7 +716,7 @@ public class Generator implements AutoCloseable {
         var ret = cache.resolve("joined-decompiled.jar");
 
         if (!Files.exists(ret) || !key.isValid(keyF)) {
-            LOGGER.debug("  Decompiling joined.jar");
+            LOGGER.debug("Decompiling joined.jar");
             var cfg = cache.resolve("joined-libraries.cfg");
             Util.writeLines(cfg, libs.stream().map(l -> "-e=" + l.toString()).toArray(String[]::new));
 
