@@ -18,6 +18,7 @@ import net.neoforged.snowblower.util.Cache;
 import net.neoforged.snowblower.util.DependencyHashCache;
 import net.neoforged.snowblower.util.HashFunction;
 import net.neoforged.snowblower.util.Tools;
+import net.neoforged.snowblower.util.UnobfuscatedVersions;
 import net.neoforged.snowblower.util.Util;
 import org.eclipse.jgit.api.CreateBranchCommand;
 import org.eclipse.jgit.api.Git;
@@ -50,8 +51,6 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -64,12 +63,14 @@ import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 public class Generator implements AutoCloseable {
-    private static final Logger LOGGER = LoggerFactory.getLogger(Generator.class);
+    /**
+     * Tracks the current version id of the generator; incremented anytime a change is made to output generation
+     * so that {@code --start-over-if-required} can detect it and start over.
+     */
+    // If making changes to generation that affect the output (e.g., updating the decompiler or adding/removing decompiler args), increment this number.
+    public static final int VERSION_ID = 1;
     public static final int COMMIT_BATCH_SIZE = 10;
-    private static final MinecraftVersion VER1_21_11 = MinecraftVersion.from("1.21.11");
-    private static final MinecraftVersion VER1_21_11_UNOBFUSCATED = MinecraftVersion.from("1.21.11_unobfuscated");
-    private static final VersionInfo VER1_21_11_UNOBFUSCATED_INFO = new VersionInfo(VER1_21_11_UNOBFUSCATED, "release", null, new Date(1765284195000L),
-            new Date(1765284195000L), "327be7759157b04495c591dbb721875e341877af", 1);
+    private static final Logger LOGGER = LoggerFactory.getLogger(Generator.class);
 
     private final Path output;
     private final Path cache;
@@ -85,8 +86,10 @@ public class Generator implements AutoCloseable {
     private boolean checkout;
     private boolean push;
     private boolean removeRemote;
-    private boolean freshIfRequired;
+    private boolean startOver;
+    private boolean startOverIfRequired;
     private boolean partialCache;
+    private boolean createdNewBranch;
     private final String[] decompileArgs = new String[]{
             // For comparison, see NeoForm parameters for 26.1-snapshot-1 here:
             // https://github.com/neoforged/NeoForm/blob/64142f5933f3e68a0d73abc60f1672b1ec90d17a/settings.gradle#L36-L51
@@ -101,6 +104,8 @@ public class Generator implements AutoCloseable {
             "--indent-string=    ",
             "--dump-code-lines"
     };
+    private MinecraftVersion startVer;
+    private MinecraftVersion targetVer;
 
     public Generator(Path output, Path cache, Path extraMappings, DependencyHashCache depCache, List<String> includes, List<String> excludes) {
         this.output = output.toAbsolutePath().normalize();
@@ -112,7 +117,7 @@ public class Generator implements AutoCloseable {
     }
 
     public Generator setup(String branchName, @Nullable URIish remoteUrl, boolean checkout, boolean push, Config cfg, BranchSpec cliBranch,
-            boolean fresh, boolean freshIfRequired, boolean partialCache) throws IOException, GitAPIException {
+            boolean startOver, boolean startOverIfRequired, boolean partialCache) throws IOException, GitAPIException {
         try {
             this.git = Git.open(this.output.toFile());
         } catch (RepositoryNotFoundException e) { // I wish there was a better way to detect if it exists/is init
@@ -124,12 +129,15 @@ public class Generator implements AutoCloseable {
 
         setupRemote(remoteUrl);
         this.branchName = branchName;
+        LOGGER.info("Branch: {}", branchName);
         this.checkout = checkout;
         this.push = push;
-        this.freshIfRequired = freshIfRequired;
+        this.startOver = startOver;
+        this.startOverIfRequired = startOverIfRequired;
         this.partialCache = partialCache;
+        this.createdNewBranch = false;
 
-        branchName = setupBranch(branchName, fresh);
+        branchName = setupBranch(branchName, startOver);
 
         var cfgBranch = cfg.branches() == null ? null : cfg.branches().get(branchName);
         if (cfgBranch == null) {
@@ -162,7 +170,12 @@ public class Generator implements AutoCloseable {
         boolean exists = git.getRepository().resolve(branchName) != null;
         boolean deleteTemp = false;
         if (fresh && exists) {
-            LOGGER.info("Starting over existing branch {}", branchName);
+            this.createdNewBranch = true;
+            if (!this.startOver && this.startOverIfRequired) {
+                LOGGER.info("Detected incompatible changes, starting over existing branch \"{}\"", branchName);
+            } else {
+                LOGGER.info("Starting over existing branch \"{}\"", branchName);
+            }
             deleteTemp = deleteBranch(branchName, currentBranch);
             exists = false;
             git.checkout().setOrphan(true).setName(branchName).call(); // Move to correctly named branch
@@ -171,9 +184,12 @@ public class Generator implements AutoCloseable {
                 deleteTemp = deleteBranch(branchName, currentBranch);
             }
 
+            LOGGER.info("Checking out remote branch \"{}/{}\"", this.remoteName, branchName);
             var upstreamMode = this.removeRemote ? CreateBranchCommand.SetupUpstreamMode.NOTRACK : CreateBranchCommand.SetupUpstreamMode.SET_UPSTREAM;
             git.checkout().setCreateBranch(true).setName(branchName).setUpstreamMode(upstreamMode).setStartPoint(this.remoteName + "/" + branchName).call();
         } else if (!branchName.equals(currentBranch)) {
+            this.createdNewBranch = !exists;
+            LOGGER.info("Checking out {} local branch \"{}\"", branchName, exists ? "existing" : "new");
             git.checkout().setOrphan(!exists).setName(branchName).call(); // Move to correctly named branch
         }
 
@@ -250,138 +266,43 @@ public class Generator implements AutoCloseable {
     }
 
     private void runInternal() throws IOException, GitAPIException {
-        var init = new InitTask(this.output, git);
-
         var manifest = VersionManifestV2.query();
         if (manifest.versions() == null)
             throw new IllegalStateException("Failed to find versions, manifest missing versions listing");
 
-        // Sorted from newest at index 0 to oldest at the end of the list
         var versions = new ArrayList<>(Arrays.asList(manifest.versions()));
+        // The version manifest defaults to sorting versions in descending order by release time, so reverse it to ascending order
+        Collections.reverse(versions);
+        UnobfuscatedVersions.injectUnobfuscatedVersions(versions);
 
-        // TODO: Make generic for all "_unobfuscated" versions, and allow loading any one of them by explicit inclusion in the branch filters,
-        //  otherwise, default to excluded, but included in the version list.
-        int idx1_21_11 = -1;
-        for (int i = 0; i < versions.size(); i++) {
-            var versionInfo = versions.get(i);
-            if (VER1_21_11.equals(versionInfo.id())) {
-                idx1_21_11 = i;
-                break;
-            }
-        }
-
-        // After 1.21.11, add "1.21.11_unobfuscated" so that we get a cleaner diff with versions that come later,
-        // since versions past 1.21.11 are unobfuscated and preserve the LVT names.
-        // Using the LVT, the decompiled output will have the original names for all parameters and local variables.
-        if (idx1_21_11 != -1) {
-            // Insert the unobfuscated version where the obfuscated version currently is so that it is counted as newer.
-            versions.add(idx1_21_11, VER1_21_11_UNOBFUSCATED_INFO);
-        }
-
-        var targetVer = this.branch.end();
-        // If we have explicit filters, apply them
-        if (this.branch.versions() != null) {
-            versions.removeIf(v -> !this.branch.versions().contains(v.id()));
-            if (targetVer == null)
-                targetVer = versions.get(0).id();
-        } else {
-            var exclude = versions.stream().map(VersionInfo::id).filter(id -> id.type().isSpecial()).collect(Collectors.toList());
-            if (this.branch.includeVersions() != null)
-                exclude.removeAll(this.branch.includeVersions());
-            if (this.branch.excludeVersions() != null)
-                exclude.addAll(this.branch.excludeVersions());
-
-            versions.removeIf(v -> exclude.contains(v.id()));
-        }
-
-        // Find the latest version from the manifest
-        if (targetVer == null) {
-            var lat = manifest.latest();
-            if (lat == null)
-                throw new IllegalStateException("Failed to determine latest version, Manifest does not contain latest entries");
-
-            if (this.branch.type().equals("release"))
-                targetVer = lat.release();
-            else {
-                var release = versions.stream().filter(e -> lat.release().equals(e.id())).findFirst().orElse(null);
-                var snapshot = versions.stream().filter(e -> lat.snapshot().equals(e.id())).findFirst().orElse(null);
-                if (release == null && snapshot == null)
-                    throw new IllegalStateException("Failed to find latest, manifest specified " + lat.release() + " and " + lat.snapshot() + " and both are missing");
-                if (release == null)
-                    targetVer = snapshot.id();
-                else if (snapshot == null)
-                    targetVer = release.id();
-                else
-                    targetVer = snapshot.releaseTime().compareTo(release.releaseTime()) > 0 ? snapshot.id() : release.id();
-            }
-        }
-
-        var startVer = this.branch.start();
-        if (startVer == null) {
-            startVer = versions.get(versions.size() - 1).id();
-        }
+        // Holds version infos filtered by the branch configuration (branch type, included/excluded versions, etc.)
+        // This method also sets up the start and end versions.
+        List<VersionInfo> filteredVersions = this.filterAndSetVersions(versions, manifest);
 
         // Validate the current metadata, and make initial commit if needed.
-        if (!init.validate(startVer)) {
-            if (this.freshIfRequired) {
-                this.setupBranch(this.branchName, true);
-                if (!init.validate(startVer))
-                    throw new IllegalStateException("This should never happen! We deleted the branch, but it still failed verification.");
-            } else {
-                LOGGER.error("""
-                        The starting commit on this branch does not have matching metadata.
-                        This could be due to a different Snowblower version or a different starting Minecraft version.
-                        Please choose a different branch with --branch or add the --start-over / --start-over-if-required flag and try again.
-                        """);
-                return;
-            }
-        }
+        if (!InitTask.validateOrInit(this.output, git, startVer) && this.startOverIfRequired("The starting commit on this branch does not have matching metadata."
+                + " This could be due to a different Snowblower version or a different starting Minecraft version."))
+            return;
 
-        // Build our target list.
-        int startIdx = -1;
-        int endIdx = -1;
-        for (int i = 0; i < versions.size(); i++) {
-            var ver = versions.get(i).id();
-            if (ver.equals(targetVer))
-                endIdx = i;
-            if (ver.equals(startVer)) {
-                startIdx = i;
-                break;
-            }
-        }
-
-        if (startIdx == -1)
-            throw new IllegalStateException("Could not find start version in version list. Was it excluded? Start: " + startVer + ", End: " + targetVer);
-        if (endIdx == -1)
-            throw new IllegalStateException("Could not find end version in version list (or end version is earlier than start version). Was it excluded? Start: " + startVer + ", End: " + targetVer);
-
-        List<VersionInfo> toGenerate = new ArrayList<>(versions.subList(endIdx, startIdx + 1));
-        if (this.branch.type().equals("release"))
-            toGenerate.removeIf(v -> !v.type().equals("release"));
-
-        // Reverse so it's in oldest first
-        Collections.reverse(toGenerate);
+        int[] range = this.getStartEndIndices(versions, filteredVersions);
+        if (range == null)
+            return;
+        List<VersionInfo> toGenerate = new ArrayList<>(filteredVersions.subList(range[0], range[1] + 1));
 
         // Allow resuming by finding the last thing we generated
-        var lastVersion = getLastVersion(git);
-        if (lastVersion != null && !init.isInitCommit(lastVersion)) {
-            boolean found = false;
-            for (int i = 0; i < toGenerate.size(); i++) {
-                if (toGenerate.get(i).id().toString().equals(lastVersion)) {
-                    toGenerate = toGenerate.subList(i + 1, toGenerate.size());
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) // We should at least find the 'end' version if we're up to date.
-                throw new IllegalStateException("Git is in invalid state, latest commit is " + lastVersion + " but it is not in our version list");
+        int skipCount = this.getSkipCount(versions, filteredVersions, toGenerate, range[0]);
+        if (skipCount == -1) {
+            return;
+        } else if (skipCount != 0) {
+            toGenerate = toGenerate.subList(skipCount, toGenerate.size());
         }
 
         // Filter version list to only versions that have mappings
         toGenerate = findVersionsWithMappings(toGenerate, cache, extraMappings);
 
         pushRemainingCommits(); // Push old commits in increments of 10 in case we didn't push them then
+
+        LOGGER.info("Generating {} versions: {}", toGenerate.size(), toGenerate.stream().map(VersionInfo::id).toList());
 
         var libs = this.cache.resolve("libraries");
         boolean generatedAny = !toGenerate.isEmpty();
@@ -412,10 +333,185 @@ public class Generator implements AutoCloseable {
         }
     }
 
+    private List<VersionInfo> filterAndSetVersions(ArrayList<VersionInfo> versions, VersionManifestV2 manifest) {
+        List<VersionInfo> filteredVersions = new ArrayList<>(versions);
+
+        this.targetVer = this.branch.end();
+        // If we have explicit filters, apply them
+        if (this.branch.versions() != null) {
+            filteredVersions.removeIf(v -> !this.branch.versions().contains(v.id()));
+            if (targetVer == null)
+                targetVer = filteredVersions.getLast().id();
+        } else {
+            var exclude = filteredVersions.stream().map(VersionInfo::id).filter(id -> id.type().isSpecial()).collect(Collectors.toSet());
+            exclude.addAll(UnobfuscatedVersions.getVersionsToExclude());
+            if (this.branch.includeVersions() != null)
+                this.branch.includeVersions().forEach(exclude::remove);
+            if (this.branch.excludeVersions() != null)
+                exclude.addAll(this.branch.excludeVersions());
+
+            filteredVersions.removeIf(v -> exclude.contains(v.id()));
+        }
+        if (this.branch.type().equals("release"))
+            filteredVersions.removeIf(v -> !v.type().equals("release"));
+
+        this.startVer = this.branch.start();
+        if (this.startVer == null)
+            this.startVer = filteredVersions.getFirst().id();
+
+        // Find the latest version from the manifest
+        if (targetVer == null) {
+            var lat = manifest.latest();
+            if (lat == null)
+                throw new IllegalStateException("Failed to determine latest version, Manifest does not contain latest entries");
+
+            if (this.branch.type().equals("release"))
+                targetVer = lat.release();
+            else {
+                var release = filteredVersions.stream().filter(e -> lat.release().equals(e.id())).findFirst().orElse(null);
+                var snapshot = filteredVersions.stream().filter(e -> lat.snapshot().equals(e.id())).findFirst().orElse(null);
+                if (release == null && snapshot == null)
+                    throw new IllegalStateException("Failed to find latest, manifest specified " + lat.release() + " and " + lat.snapshot() + " and both are missing");
+                if (release == null)
+                    targetVer = snapshot.id();
+                else if (snapshot == null)
+                    targetVer = release.id();
+                else
+                    targetVer = snapshot.releaseTime().compareTo(release.releaseTime()) > 0 ? snapshot.id() : release.id();
+            }
+        }
+
+        LOGGER.info("Start version: {}", startVer);
+        LOGGER.info("End version: {}", targetVer);
+
+        return filteredVersions;
+    }
+
+    private int[] getStartEndIndices(List<VersionInfo> versions, List<VersionInfo> filteredVersions) {
+        // Build our target list.
+        int startIdx = -1;
+        int endIdx = -1;
+        for (int i = filteredVersions.size() - 1; i >= 0; i--) {
+            var ver = filteredVersions.get(i).id();
+            if (ver.equals(startVer)) {
+                startIdx = i;
+                if (endIdx != -1)
+                    break;
+            }
+            if (ver.equals(targetVer)) {
+                endIdx = i;
+                if (startIdx != -1)
+                    break;
+            }
+        }
+
+        if (startIdx == -1) {
+            boolean startVerExists = false;
+            for (var ver : versions) {
+                if (startVer.equals(ver.id())) {
+                    startVerExists = true;
+                    break;
+                }
+            }
+
+            if (startVerExists) {
+                LOGGER.error("Start version \"{}\" is not included by the current branch configuration. Please change the included versions list or branch and try again.", startVer);
+            } else {
+                LOGGER.error("Start version \"{}\" not found in version manifest.", startVer);
+            }
+            return null;
+        }
+
+        if (endIdx == -1) {
+            boolean endVerExists = false;
+            for (var ver : versions) {
+                if (targetVer.equals(ver.id())) {
+                    endVerExists = true;
+                    break;
+                }
+            }
+
+            if (endVerExists) {
+                LOGGER.error("End version \"{}\" is not included by the current branch configuration. Please change the included versions list or branch and try again.", startVer);
+            } else {
+                LOGGER.error("End version \"{}\" not found in version manifest.", startVer);
+            }
+            return null;
+        }
+
+        if (startIdx > endIdx) {
+            LOGGER.error("Start version of \"{}\" is newer than end version of \"{}\" according to the version manifest.", startVer, targetVer);
+            return null;
+        }
+
+        return new int[]{startIdx, endIdx};
+    }
+
+    private int getSkipCount(List<VersionInfo> versions, List<VersionInfo> filteredVersions, List<VersionInfo> toGenerate, int startIdx) throws GitAPIException, IOException {
+        if (this.createdNewBranch)
+            return 0;
+
+        var lastVersion = getLastVersion(this.git);
+        if (lastVersion == null || InitTask.isInitCommit(lastVersion))
+            return 0;
+
+        LOGGER.info("Found version of latest commit: {}", lastVersion);
+
+        for (int i = 0; i < toGenerate.size(); i++) {
+            if (toGenerate.get(i).id().toString().equals(lastVersion)) {
+                return i + 1;
+            }
+        }
+
+        // Fallback: If we didn't find the last committed version in the version list to generate, check if:
+        // - it's missing entirely (error/start over accordingly),
+        // - it got filtered out of the version list to generate (error/start over accordingly), or
+        // - it's newer than the target version (then skip generation completely)
+        String errorMsg = "Cannot resume generation. Version of latest commit is \"{}\", {}";
+
+        boolean lastVersionExists = false;
+        for (var ver : versions) {
+            if (lastVersion.equals(ver.id().toString())) {
+                lastVersionExists = true;
+                break;
+            }
+        }
+
+        if (!lastVersionExists && this.startOverIfRequired(errorMsg, lastVersion, "but it is not in the version manifest?"))
+            return -1;
+
+        int lastIdx = -1;
+        for (int i = 0; i < filteredVersions.size(); i++) {
+            VersionInfo ver = filteredVersions.get(i);
+            if (lastVersion.equals(ver.id().toString())) {
+                lastIdx = i;
+                break;
+            }
+        }
+
+        if (lastIdx == -1) {
+            if (this.startOverIfRequired(errorMsg, lastVersion, "but it is not included by the current branch configuration."))
+                return -1;
+
+            return 0;
+        } else if (lastIdx < startIdx) {
+            if (this.startOverIfRequired(errorMsg, lastVersion, "which is older than the start version."))
+                return -1;
+
+            return 0;
+        }
+
+        // Since startIdx <= endIdx, if we got here, we know that lastIdx > endIdx (it's newer than the target version)
+        // since it wasn't found in toGenerate, and that it's in the filtered version list, so skip generation.
+        return toGenerate.size();
+    }
+
     private void pushRemainingCommits() throws GitAPIException, IOException {
-        if (!this.push || this.remoteName == null) return;
+        if (!this.push || this.remoteName == null || this.createdNewBranch)
+            return;
         final ObjectId remoteBranch = git.getRepository().resolve("refs/remotes/" + remoteName + "/" + branchName);
-        if (remoteBranch == null) return;
+        if (remoteBranch == null)
+            return;
 
         // The commits go newer -> older (e.g. 0 -> first, 100 -> last)
         final List<RevCommit> ourCommits = new ArrayList<>();
@@ -431,7 +527,8 @@ public class Generator implements AutoCloseable {
             final var commits = ourCommits.subList(0, idx).stream()
                     .collect(Util.partitionEvery(COMMIT_BATCH_SIZE)) // Partition those into lists of maximum 10 commits so we properly batch
                     .entrySet().stream() // Stream the entry set
-                    .sorted(Comparator.<Map.Entry<Integer, List<RevCommit>>, Integer>comparing(Map.Entry::getKey).reversed()) // Make sure the lists are in the other way around (we want to push the oldest first as pushing a commit pushes all commits before it)
+                    // Make sure the lists are in the other way around (we want to push the oldest first as pushing a commit pushes all commits before it)
+                    .sorted(Map.Entry.<Integer, List<RevCommit>>comparingByKey().reversed())
                     .map(Map.Entry::getValue)
                     .filter(Predicate.not(List::isEmpty)) // This shouldn't ever happen but just in case
                     .toList();
@@ -445,16 +542,19 @@ public class Generator implements AutoCloseable {
         // Walk all commits on the remote branch (newest -> oldest)
         for (final RevCommit commit : git.log().add(remoteBranch).setMaxCount(Integer.MAX_VALUE).call()) {
             final int idx = ourCommits.indexOf(commit);
-            if (idx == 0) return; // If it is the first commit, the branch is up-to-date
-            // If we find the common ancestor that is NOT the first commit push
-            else if (idx > 0) {
+            if (idx == 0)
+                return; // If it is the first commit, the branch is up-to-date
+
+            // If we find the common ancestor that is NOT the first commit, push
+            if (idx > 0) {
                 pusher.push(idx);
                 foundCommonAncestor = true;
                 break; // We've found the common commit, break
             }
         }
 
-        if (!foundCommonAncestor) { // We haven't found a common ancestor so let's force push all commits
+        if (!foundCommonAncestor) {
+            // We haven't found a common ancestor so let's force push all commits
             pusher.push(ourCommits.size());
         }
     }
@@ -497,17 +597,7 @@ public class Generator implements AutoCloseable {
             // Download the version json file.
             var json = cache.resolve(ver.id().toString()).resolve("version.json");
             if (!Files.exists(json) || !HashFunction.SHA1.hash(json).equals(ver.sha1())) {
-                if (VER1_21_11_UNOBFUSCATED.equals(ver.id())) {
-                    try (var in = Generator.class.getResourceAsStream("/1_21_11_unobfuscated.json")) {
-                        if (in == null)
-                            throw new IOException("Failed to find embedded version file for 1.21.11_unobfuscated");
-
-                        Files.createDirectories(json.getParent());
-                        Files.copy(in, json);
-                    }
-                } else {
-                    Util.downloadFile(json, ver.url(), ver.sha1());
-                }
+                Util.downloadFile(json, ver.url(), ver.sha1());
             }
 
             Version fullVersion = Version.load(json);
@@ -530,9 +620,8 @@ public class Generator implements AutoCloseable {
     }
 
     /**
-     * Gets the last 'automated' commit for the current branch.
+     * Gets the last automated commit for the current branch (i.e., committed by the provided/default committer account).
      * This allows us to know what version to resume from.
-     * Why we allow manual commits? I have no idea. Shrimp wanted it.
      */
     private static String getLastVersion(Git git) throws IOException, GitAPIException {
         var headId = git.getRepository().resolve(Constants.HEAD);
@@ -598,48 +687,44 @@ public class Generator implements AutoCloseable {
             var matcher = createMatcher(zipFs, includes, excludes);
             var root = zipFs.getPath("/");
             try (Stream<Path> walker = Files.walk(root)) {
-                walker.filter(Files::isRegularFile).forEach(p -> {
-                    try {
-                        var relative = root.relativize(p);
-                        if (!matcher.matches(relative)) {
-                            return;
+                Iterable<Path> iterable = () -> walker.filter(Files::isRegularFile).iterator();
+                for (Path p : iterable) {
+                    var relative = root.relativize(p);
+                    if (!matcher.matches(relative)) {
+                        return;
+                    }
+
+                    var target = (p.toString().endsWith(".java") ? java : resources).resolve(relative.toString());
+
+                    if (existingFiles.remove(target)) {
+                        boolean copy;
+                        Path realPath = target.toRealPath(LinkOption.NOFOLLOW_LINKS);
+                        if (!realPath.toString().equals(target.toString())) {
+                            Files.delete(realPath);
+                            removed.add(realPath);
+                            added.add(target);
+                            copy = true;
+                        } else {
+                            var existing = HashFunction.MD5.hash(target);
+                            var created = HashFunction.MD5.hash(p);
+                            copy = !existing.equals(created);
                         }
 
-                        var target = (p.toString().endsWith(".java") ? java : resources).resolve(relative.toString());
-
-                        if (existingFiles.remove(target)) {
-                            boolean copy;
-                            Path realPath = target.toRealPath(LinkOption.NOFOLLOW_LINKS);
-                            if (!realPath.toString().equals(target.toString())) {
-                                Files.delete(realPath);
-                                removed.add(realPath);
-                                added.add(target);
-                                copy = true;
-                            } else {
-                                var existing = HashFunction.MD5.hash(target);
-                                var created = HashFunction.MD5.hash(p);
-                                copy = !existing.equals(created);
-                            }
-
-                            if (copy) {
-                                Files.copy(p, target, StandardCopyOption.REPLACE_EXISTING);
-                                added.add(target);
-                            }
-                        } else {
-                            Files.createDirectories(target.getParent());
+                        if (copy) {
                             Files.copy(p, target, StandardCopyOption.REPLACE_EXISTING);
                             added.add(target);
                         }
-
-                    } catch (IOException e) {
-                        throw new RuntimeException(e);
+                    } else {
+                        Files.createDirectories(target.getParent());
+                        Files.copy(p, target, StandardCopyOption.REPLACE_EXISTING);
+                        added.add(target);
                     }
-                });
+                }
             }
         }
 
         var enhanced = EnhanceVersionTask.enhance(output, version);
-        existingFiles.removeAll(enhanced);
+        enhanced.forEach(existingFiles::remove);
         added.addAll(enhanced);
 
         existingFiles.stream().sorted().forEach(p -> {
@@ -667,6 +752,27 @@ public class Generator implements AutoCloseable {
             }
             Util.commit(git, version.id().toString(), version.releaseTime());
         }
+    }
+
+    /**
+     * Returns {@code true} if an error occurred, either the user did not setup {@code --start-over-if-required}
+     * or the initial commit task failed to validate/commit after recreating the branch.
+     */
+    private boolean startOverIfRequired(String errorMsg, Object... errorMsgArgs) throws IOException, GitAPIException {
+        if (this.startOverIfRequired) {
+            this.setupBranch(this.branchName, true);
+
+            if (!InitTask.validateOrInit(this.output, this.git, this.startVer)) {
+                LOGGER.error("Initial commit failed verification after restarting branch. This should never happen!");
+                return true;
+            }
+
+            return false;
+        }
+
+        LOGGER.error(errorMsg, errorMsgArgs);
+        LOGGER.error("Please choose a different branch with --branch or add the --start-over / --start-over-if-required flag and try again.");
+        return true;
     }
 
     private List<Path> getLibraries(Path cache, Version version) throws IOException {
@@ -765,7 +871,8 @@ public class Generator implements AutoCloseable {
         }
         return path -> {
             for (PathMatcher matcher : matchers) {
-                if (matcher.matches(path)) return true;
+                if (matcher.matches(path))
+                    return true;
             }
             return false;
         };

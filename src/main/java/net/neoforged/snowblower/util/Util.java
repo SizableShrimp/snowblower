@@ -102,7 +102,13 @@ public class Util {
             Files.createDirectories(file.getParent());
         }
 
-        download(url, () -> HttpResponse.BodyHandlers.ofFile(file));
+        if (url.getProtocol().equals("file") || url.getProtocol().equals("jar")) {
+            try (var inputStream = url.openStream()) {
+                Files.copy(inputStream, file);
+            }
+        } else {
+            download(url, () -> HttpResponse.BodyHandlers.ofFile(file));
+        }
 
         if (sha1 != null) {
             var actual = HashFunction.SHA1.hash(file);
