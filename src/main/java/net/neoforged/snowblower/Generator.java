@@ -190,7 +190,7 @@ public class Generator implements AutoCloseable {
             git.checkout().setCreateBranch(true).setName(branchName).setUpstreamMode(upstreamMode).setStartPoint(this.remoteName + "/" + branchName).call();
         } else if (!branchName.equals(currentBranch)) {
             this.createdNewBranch = !exists;
-            LOGGER.info("Checking out {} local branch \"{}\"", branchName, exists ? "existing" : "new");
+            LOGGER.info("Checking out {} local branch \"{}\"", exists ? "existing" : "new", branchName);
             git.checkout().setOrphan(!exists).setName(branchName).call(); // Move to correctly named branch
         }
 

@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) NeoForged
+ * SPDX-License-Identifier: LGPL-2.1-only
+ */
 package net.neoforged.snowblower.github;
 
 import org.slf4j.Logger;
