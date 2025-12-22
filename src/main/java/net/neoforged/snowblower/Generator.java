@@ -10,6 +10,7 @@ import net.neoforged.snowblower.data.MinecraftVersion;
 import net.neoforged.snowblower.data.Version;
 import net.neoforged.snowblower.data.VersionManifestV2;
 import net.neoforged.snowblower.data.VersionManifestV2.VersionInfo;
+import net.neoforged.snowblower.github.GitHubActions;
 import net.neoforged.snowblower.tasks.MappingTask;
 import net.neoforged.snowblower.tasks.MergeRemapTask;
 import net.neoforged.snowblower.tasks.enhance.EnhanceVersionTask;
@@ -311,13 +312,15 @@ public class Generator implements AutoCloseable {
             var versionCache = this.cache.resolve(versionInfo.id().toString());
             Files.createDirectories(versionCache);
 
-            LOGGER.info("[{}, {}] Generating {}", x + 1, toGenerate.size(), versionInfo.id());
             try {
+                GitHubActions.logStartGroup(versionInfo.id());
+                LOGGER.info("[{}, {}] Generating {}", x + 1, toGenerate.size(), versionInfo.id());
                 MDC.put("mcver", " [" + versionInfo.id() + "]");
 
                 var version = Version.load(versionCache.resolve("version.json"));
                 generate(versionCache, libs, version);
             } finally {
+                GitHubActions.logEndGroup();
                 MDC.remove("mcver");
             }
 
@@ -593,6 +596,7 @@ public class Generator implements AutoCloseable {
 
     private static List<VersionInfo> findVersionsWithMappings(List<VersionInfo> versions, Path cache, Path extraMappings) throws IOException {
         LOGGER.info("Downloading version manifests");
+        GitHubActions.logStartGroup("Downloading version manifests");
         List<VersionInfo> ret = new ArrayList<>();
         for (var ver : versions) {
             // Download the version json file.
@@ -617,6 +621,7 @@ public class Generator implements AutoCloseable {
             }
 
         }
+        GitHubActions.logEndGroup();
         return ret;
     }
 

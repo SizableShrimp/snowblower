@@ -10,6 +10,8 @@ import joptsimple.OptionSet;
 import net.neoforged.snowblower.data.Config;
 import net.neoforged.snowblower.data.Config.BranchSpec;
 import net.neoforged.snowblower.data.MinecraftVersion;
+import net.neoforged.snowblower.github.GitHubAppCredentials;
+import net.neoforged.snowblower.github.GitHubActions;
 import net.neoforged.snowblower.util.DependencyHashCache;
 import net.neoforged.snowblower.util.Util;
 import org.eclipse.jgit.lib.PersonIdent;
@@ -51,6 +53,7 @@ public class Main {
 
         var githubAppId = parser.accepts("github-app-id", "The ID of a GitHub app to use for git auth").withRequiredArg().ofType(String.class);
         var githubInstallationRepo = parser.accepts("github-installation-repo", "The name of the repository to use as the installation target of the GitHub app").availableIf(githubAppId).withRequiredArg();
+        var githubActionsO = parser.accepts("github-actions", "Whether Snowblower is being executed in a GitHub Actions environment (to enhance logging)");
 
         OptionSet options;
         try {
@@ -94,6 +97,8 @@ public class Main {
         var cliBranch = new BranchSpec(options.has(releasesOnlyO) ? "release" : "all", startVer, targetVer);
 
         String branchName = options.valueOf(branchNameO);
+
+        GitHubActions.setEnvironment(options.has(githubActionsO));
 
         Config cfg;
         if (options.has(configO)) {

@@ -11,8 +11,18 @@
         </encoder>
     </appender>
 
+    <appender name="GITHUB_ACTIONS" class="ConsoleAppender">
+        <encoder class="PatternLayoutEncoder">
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+
     <logger name="net.neoforged.snowblower" level="debug">
         <appender-ref ref="STDOUT"/>
+    </logger>
+
+    <logger name="net.neoforged.snowblower.github.GitHubActions" level="info" additivity="false">
+        <appender-ref ref="GITHUB_ACTIONS"/>
     </logger>
 
     <logger name="org.eclipse.jgit" level="info">
