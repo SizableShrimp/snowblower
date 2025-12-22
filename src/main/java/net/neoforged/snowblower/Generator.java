@@ -534,7 +534,7 @@ public class Generator implements AutoCloseable {
                     .toList();
             // Iterate over the commits and push them
             for (final var notPushed : commits) {
-                attemptPush("Pushed " + notPushed.size() + " old commits.", new RefSpec(notPushed.get(0).getId().getName() + ":refs/heads/" + this.branchName));
+                attemptPush("Pushing " + notPushed.size() + " old commits", new RefSpec(notPushed.get(0).getId().getName() + ":refs/heads/" + this.branchName));
             }
         };
 
@@ -555,6 +555,7 @@ public class Generator implements AutoCloseable {
 
         if (!foundCommonAncestor) {
             // We haven't found a common ancestor so let's force push all commits
+            LOGGER.info("Could not find common ancestor commit; pushing all {} old commits", ourCommits.size());
             pusher.push(ourCommits.size());
         }
     }
@@ -579,12 +580,12 @@ public class Generator implements AutoCloseable {
                 .map(res -> res.getRemoteUpdate("refs/heads/" + this.branchName))
                 .filter(Objects::nonNull)
                 .findFirst()
-                .orElseThrow(() -> new IllegalStateException("Attempted to push to remote, but failed. Reason unknown."));
+                .orElseThrow(() -> new IllegalStateException("Attempted to force push to remote, but failed. Reason unknown."));
 
         LOGGER.info(switch (remoteRefUpdate.getStatus()) {
-            case OK -> "  Successfully pushed to remote.";
-            case UP_TO_DATE -> "  Attempted to push to remote, but local branch was up-to-date.";
-            default -> throw new IllegalStateException("Could not push to remote: status: " + remoteRefUpdate.getStatus() + ", message: " + remoteRefUpdate.getMessage());
+            case OK -> "  Successfully force pushed to remote.";
+            case UP_TO_DATE -> "  Attempted to force push to remote, but local branch was up-to-date.";
+            default -> throw new IllegalStateException("Could not force push to remote: status: " + remoteRefUpdate.getStatus() + ", message: " + remoteRefUpdate.getMessage());
         });
 
         return remoteRefUpdate.getStatus() == RemoteRefUpdate.Status.OK;
