@@ -11,14 +11,13 @@ import net.neoforged.snowblower.data.Version;
 import net.neoforged.snowblower.data.VersionManifestV2;
 import net.neoforged.snowblower.data.VersionManifestV2.VersionInfo;
 import net.neoforged.snowblower.github.GitHubActions;
+import net.neoforged.snowblower.tasks.DecompileTask;
 import net.neoforged.snowblower.tasks.MappingTask;
 import net.neoforged.snowblower.tasks.MergeRemapTask;
 import net.neoforged.snowblower.tasks.enhance.EnhanceVersionTask;
 import net.neoforged.snowblower.tasks.init.InitTask;
-import net.neoforged.snowblower.util.Cache;
 import net.neoforged.snowblower.util.DependencyHashCache;
 import net.neoforged.snowblower.util.HashFunction;
-import net.neoforged.snowblower.util.Tools;
 import net.neoforged.snowblower.util.UnobfuscatedVersions;
 import net.neoforged.snowblower.util.Util;
 import org.eclipse.jgit.api.CreateBranchCommand;
@@ -35,7 +34,6 @@ import org.eclipse.jgit.transport.RemoteConfig;
 import org.eclipse.jgit.transport.RemoteRefUpdate;
 import org.eclipse.jgit.transport.URIish;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.java.decompiler.main.decompiler.ConsoleDecompiler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -91,20 +89,6 @@ public class Generator implements AutoCloseable {
     private boolean startOverIfRequired;
     private boolean partialCache;
     private boolean createdNewBranch;
-    private final String[] decompileArgs = new String[]{
-            // For comparison, see NeoForm parameters for 26.1-snapshot-1 here:
-            // https://github.com/neoforged/NeoForm/blob/64142f5933f3e68a0d73abc60f1672b1ec90d17a/settings.gradle#L36-L51
-            "--decompile-inner",
-            "--remove-bridge",
-            "--decompile-generics",
-            "--ascii-strings",
-            "--remove-synthetic",
-            "--include-classpath",
-            "--ignore-invalid-bytecode",
-            "--bytecode-source-mapping",
-            "--indent-string=    ",
-            "--dump-code-lines"
-    };
     private MinecraftVersion startVer;
     private MinecraftVersion targetVer;
 
@@ -644,27 +628,7 @@ public class Generator implements AutoCloseable {
     }
 
     private void generate(Path cache, Path libCache, Version version) throws IOException, GitAPIException {
-        Path decomped = null;
-        if (partialCache) {
-            var decompJar = cache.resolve("joined-decompiled.jar");
-            var keyF = cache.resolve("joined-decompiled.jar.cache");
-            if (Files.exists(decompJar) && Files.exists(keyF)) {
-                var key = new Cache()
-                        .put(Tools.VINEFLOWER, this.depCache)
-                        .put(Tools.VINEFLOWER_PLUGINS, this.depCache)
-                        .put("downloads-client", version.downloads().get("client").sha1())
-                        .put("downloads-client_mappings", version.downloads().get("client_mappings").sha1())
-                        .put("downloads-server", version.downloads().get("server").sha1())
-                        .put("downloads-server", version.downloads().get("server_mappings").sha1());
-
-                key.put("decompileArgs", String.join(" ", decompileArgs));
-
-                if (key.isValid(keyF, str -> str.equals(Tools.VINEFLOWER) || str.equals(Tools.VINEFLOWER_PLUGINS) || str.equals("decompileArgs") || str.startsWith("downloads-"))) {
-                    decomped = decompJar;
-                    LOGGER.debug("Decompiled jar partial cache hit");
-                }
-            }
-        }
+        Path decomped = DecompileTask.checkPartialCache(cache, version, depCache, partialCache);
 
         if (decomped == null) {
             var mappings = MappingTask.getMergedMappings(cache, version, extraMappings);
@@ -673,9 +637,8 @@ public class Generator implements AutoCloseable {
 
             var joined = MergeRemapTask.getJoinedRemappedJar(cache, version, mappings, depCache, partialCache);
             var libs = getLibraries(libCache, version);
-            decomped = getDecompiledJar(cache, version, joined, libCache, libs);
+            decomped = DecompileTask.getDecompiledJar(cache, version, joined, libCache, libs, depCache);
         }
-
 
         Path src = output.resolve("src").resolve("main");
         Set<Path> existingFiles;
@@ -793,54 +756,12 @@ public class Generator implements AutoCloseable {
             var dl = lib.downloads().get("artifact");
             var target = cache.resolve(dl.path());
 
-            // In theory we should check the hash matches the hash in the json,
-            // but I don't think this will ever be an issue
             if (!Files.exists(target)) {
                 Files.createDirectories(target.getParent());
                 Util.downloadFile(target, dl.url(), dl.sha1());
             }
 
             ret.add(target);
-        }
-        return ret;
-    }
-
-    private Path getDecompiledJar(Path cache, Version version, Path renamed, Path libCache, List<Path> libs) throws IOException {
-        var key = new Cache()
-            .put(Tools.VINEFLOWER, this.depCache)
-            .put(Tools.VINEFLOWER_PLUGINS, this.depCache)
-            .put("renamed", renamed);
-
-        if (partialCache) {
-            key.put("downloads-client", version.downloads().get("client").sha1());
-            key.put("downloads-client_mappings", version.downloads().get("client_mappings").sha1());
-            key.put("downloads-server", version.downloads().get("server").sha1());
-            key.put("downloads-server", version.downloads().get("server_mappings").sha1());
-        }
-
-        key.put("decompileArgs", String.join(" ", decompileArgs));
-
-        for (var lib : libs) {
-            var relative = libCache.relativize(lib);
-            key.put(relative.toString(), lib);
-        }
-
-        var keyF = cache.resolve("joined-decompiled.jar.cache");
-        var ret = cache.resolve("joined-decompiled.jar");
-
-        if (!Files.exists(ret) || !key.isValid(keyF)) {
-            LOGGER.debug("Decompiling joined.jar");
-            var cfg = cache.resolve("joined-libraries.cfg");
-            Util.writeLines(cfg, libs.stream().map(l -> "-e=" + l.toString()).toArray(String[]::new));
-
-            ConsoleDecompiler.main(Stream.concat(Arrays.stream(decompileArgs), Stream.of(
-                "-log=ERROR", // IFernflowerLogger.Severity
-                "-cfg", cfg.toString(),
-                renamed.toString(),
-                ret.toString()
-            )).toArray(String[]::new));
-
-            key.write(keyF);
         }
         return ret;
     }

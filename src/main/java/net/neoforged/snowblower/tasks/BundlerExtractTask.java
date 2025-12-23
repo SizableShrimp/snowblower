@@ -5,6 +5,7 @@
 package net.neoforged.snowblower.tasks;
 
 import net.neoforged.installertools.BundlerExtract;
+import net.neoforged.snowblower.data.Version;
 import net.neoforged.snowblower.util.Cache;
 import net.neoforged.snowblower.util.DependencyHashCache;
 import net.neoforged.snowblower.util.Tools;
@@ -27,10 +28,25 @@ import java.util.jar.Manifest;
 import java.util.stream.Stream;
 
 public class BundlerExtractTask {
+    public static final String SERVER_EXTRACTED_JAR_FILENAME = "server-extracted.jar";
+    public static final String SERVER_EXTRACTED_JAR_CACHE_FILENAME = SERVER_EXTRACTED_JAR_FILENAME + ".cache";
     private static final Logger LOGGER = LoggerFactory.getLogger(BundlerExtractTask.class);
     private static final Attributes.Name FORMAT = new Attributes.Name("Bundler-Format");
 
-    public static Path getExtractedServerJar(Path cache, Path serverJar, DependencyHashCache depCache, Path mappingsPath) throws IOException {
+    private static Cache getKey(Version version, DependencyHashCache depCache) {
+        return new Cache()
+                .put(Tools.INSTALLERTOOLS, depCache)
+                .put("server", version.downloads().get("server").sha1());
+    }
+
+    public static boolean inPartialCache(Path cache, Version version, DependencyHashCache depCache) throws IOException {
+        var key = getKey(version, depCache);
+        var keyF = cache.resolve(SERVER_EXTRACTED_JAR_CACHE_FILENAME);
+
+        return Files.exists(keyF) && key.isValid(keyF);
+    }
+
+    public static Path getExtractedServerJar(Path cache, Version version, Path serverJar, DependencyHashCache depCache, Path mappingsPath) throws IOException {
         boolean bundled = true;
         try (FileSystem fs = FileSystems.newFileSystem(serverJar, Map.of())) {
             Path mfp = fs.getPath("META-INF", "MANIFEST.MF");
@@ -48,11 +64,9 @@ public class BundlerExtractTask {
             }
         }
 
-        var key = new Cache()
-                .put(Tools.INSTALLERTOOLS, depCache)
-                .put("server", serverJar);
-        var keyF = cache.resolve("server-extracted.jar.cache");
-        var extractedServerJar = cache.resolve("server-extracted.jar");
+        var key = getKey(version, depCache);
+        var keyF = cache.resolve(SERVER_EXTRACTED_JAR_CACHE_FILENAME);
+        var extractedServerJar = cache.resolve(SERVER_EXTRACTED_JAR_FILENAME);
 
         if (!Files.exists(extractedServerJar) || !key.isValid(keyF)) {
             LOGGER.debug("Extracting server jar");
@@ -67,10 +81,8 @@ public class BundlerExtractTask {
                     System.setOut(stdout);
                 }
             } else {
-                if (mappingsPath == null)
-                    return serverJar; // No mappings; skip
-
-                deleteExtraFiles(serverJar, extractedServerJar, mappingsPath);
+                if (mappingsPath != null)
+                    deleteExtraFiles(serverJar, extractedServerJar, mappingsPath);
             }
 
             key.write(keyF);

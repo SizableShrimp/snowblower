@@ -4,6 +4,14 @@
  */
 package net.neoforged.snowblower.tasks;
 
+import net.neoforged.snowblower.data.Version;
+import net.neoforged.snowblower.util.Cache;
+import net.neoforged.snowblower.util.DependencyHashCache;
+import net.neoforged.snowblower.util.Util;
+import net.neoforged.srgutils.IMappingFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,15 +21,39 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import net.neoforged.snowblower.data.Version;
-import net.neoforged.snowblower.util.Cache;
-import net.neoforged.snowblower.util.Util;
-import net.neoforged.srgutils.IMappingFile;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 public class MappingTask {
+    public static final String MAPPINGS_FILENAME = "moj_to_obf.tsrg";
+    public static final String MAPPINGS_CACHE_FILENAME = MAPPINGS_FILENAME + ".cache";
     private static final Logger LOGGER = LoggerFactory.getLogger(MappingTask.class);
+
+    private static Cache getKey(Path cache, Version version) throws IOException {
+        Path clientMappings = cache.resolve("client_mappings.txt");
+        Path serverMappings = cache.resolve("server_mappings.txt");
+
+        var key = new Cache()
+                .put("client", Files.exists(clientMappings) ? clientMappings : null)
+                .put("server", Files.exists(serverMappings) ? serverMappings : null);
+
+        Version.Download clientMappingsDownload = version.downloads().get("client_mappings");
+        if (clientMappingsDownload != null)
+            key.put("client_mappings", clientMappingsDownload.sha1());
+        Version.Download serverMappingsDownload = version.downloads().get("server_mappings");
+        if (serverMappingsDownload != null)
+            key.put("server_mappings", serverMappingsDownload.sha1());
+
+        return key;
+    }
+
+    public static boolean inPartialCache(Path cache, Version version, DependencyHashCache depCache) throws IOException {
+        var mappings = cache.resolve(MAPPINGS_FILENAME);
+        if (!Files.exists(mappings))
+            return version.isUnobfuscated(); // No mappings necessary if unobfuscated, so count it as in the partial cache
+
+        var key = getKey(cache, version);
+        var keyF = cache.resolve(MAPPINGS_CACHE_FILENAME);
+
+        return Files.exists(keyF) && key.isValid(keyF);
+    }
 
     public static Path getMergedMappings(Path cache, Version version, Path extraMappings) throws IOException {
         boolean unobfuscated = version.isUnobfuscated();
@@ -45,12 +77,9 @@ public class MappingTask {
         if (clientMojToObf != null && serverMojToObf != null && !canMerge(clientMojToObf, serverMojToObf))
             throw new IllegalStateException("Client mappings for " + version.id() + " are not a strict superset of the server mappings.");
 
-        var key = new Cache()
-            // Should we add code version? I don't think it matters much for this one.
-            .put("client", clientMojToObf == null ? null : cache.resolve("client_mappings.txt"))
-            .put("server", serverMojToObf == null ? null : cache.resolve("server_mappings.txt"));
-        var keyF = cache.resolve("moj_to_obf.tsrg.cache");
-        var ret = cache.resolve("moj_to_obf.tsrg");
+        var key = getKey(cache, version);
+        var keyF = cache.resolve(MAPPINGS_CACHE_FILENAME);
+        var ret = cache.resolve(MAPPINGS_FILENAME);
 
         if (!Files.exists(ret) || !key.isValid(keyF)) {
             var mappingsToWrite = clientMojToObf != null ? clientMojToObf : serverMojToObf;

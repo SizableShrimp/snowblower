@@ -4,14 +4,6 @@
  */
 package net.neoforged.snowblower.tasks;
 
-import java.io.IOException;
-import java.io.OutputStream;
-import java.io.PrintStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-
 import net.neoforged.installertools.ProcessMinecraftJar;
 import net.neoforged.snowblower.data.Version;
 import net.neoforged.snowblower.util.Cache;
@@ -21,34 +13,57 @@ import net.neoforged.snowblower.util.Util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
 public class MergeRemapTask {
+    public static final String JOINED_JAR_FILENAME = "joined.jar";
+    public static final String JOINED_JAR_CACHE_FILENAME = JOINED_JAR_FILENAME + ".cache";
     private static final Logger LOGGER = LoggerFactory.getLogger(MergeRemapTask.class);
 
+    private static Cache getKey(Version version, Path mappings, DependencyHashCache depCache) throws IOException {
+        return new Cache()
+                .put(Tools.INSTALLERTOOLS, depCache)
+                .put("map", mappings)
+                .put("client", getSha("client", version))
+                .put("server-full", getSha("server", version));
+    }
+
+    public static boolean inPartialCache(Path cache, Version version, DependencyHashCache depCache) throws IOException {
+        var joined = cache.resolve(JOINED_JAR_FILENAME);
+        if (!Files.exists(joined))
+            return false;
+
+        var key = getKey(version, cache.resolve(MappingTask.MAPPINGS_FILENAME), depCache);
+        var keyF = cache.resolve(JOINED_JAR_CACHE_FILENAME);
+
+        return Files.exists(keyF) && key.isValid(keyF, k -> !k.equals("server"));
+    }
+
     public static Path getJoinedRemappedJar(Path cache, Version version, Path mappings, DependencyHashCache depCache, boolean partialCache) throws IOException {
-        var keyF = cache.resolve("joined.jar.cache");
-        var joinedJar = cache.resolve("joined.jar");
-        if (partialCache && Files.exists(joinedJar) && Files.exists(keyF)) {
-            var key = new Cache()
-                    .put(Tools.INSTALLERTOOLS, depCache)
-                    .put("client", getSha("client", version))
-                    .put("server-full", getSha("server", version))
-                    .put("map", mappings);
-            if (key.isValid(keyF, k -> !k.equals("server"))) {
-                LOGGER.debug("Hitting cache for joined jar");
-                return joinedJar;
-            }
+        var joinedJar = cache.resolve(JOINED_JAR_FILENAME);
+
+        if (partialCache && inPartialCache(cache, version, depCache)) {
+            LOGGER.debug("Hit partial cache for joined jar");
+
+            return joinedJar;
         }
+
+        var key = getKey(version, mappings, depCache);
+        var keyF = cache.resolve(JOINED_JAR_CACHE_FILENAME);
 
         var clientJar = getJar("client", cache, version);
         var serverFullJar = getJar("server", cache, version);
-        var serverJar = BundlerExtractTask.getExtractedServerJar(cache, serverFullJar, depCache, mappings);
+        var serverJar = BundlerExtractTask.getExtractedServerJar(cache, version, serverFullJar, depCache, mappings);
 
-        var key = new Cache()
-                .put(Tools.INSTALLERTOOLS, depCache)
-                .put("client", clientJar)
-                .put("server", serverJar)
+        key.put("client", clientJar)
                 .put("server-full", serverFullJar)
-                .put("map", mappings);
+                .put("server", serverJar);
 
         if (!Files.exists(joinedJar) || !key.isValid(keyF)) {
             LOGGER.debug("Merging client and server jars and remapping");

@@ -46,8 +46,8 @@ public class Main {
         var checkoutO = parser.accepts("checkout", "Whether to checkout the remote branch (if it exists) before generating").availableIf("remote");
         var pushO = parser.accepts("push", "Whether to push the branch to the remote once finished").availableIf("remote");
         var committerO = parser.accepts("committer", "The name and email of the user to use as the committer, separated by a space. If omitted, defaults to snowforge").withRequiredArg();
-        var partialCacheO = parser.accepts("partial-cache", "If true, the cache will be partial, meaning that the server and client jar will be deleted, leaving only the joined jar. The SHA in the version manifest will be used to determine whether the joined jar should be remade");
-        
+        var partialCacheO = parser.accepts("partial-cache", "If present, the cache will be partial, meaning that the server and client jar will be deleted, leaving only the joined jar. The SHA1 hashes in the version manifest will be used to determine whether the joined jar should be remade");
+
         var excludeO = parser.accepts("exclude", "A glob pattern (see FileSystem#getPathMatcher) for excluding files from the output").withRequiredArg().ofType(String.class);
         var includeO = parser.accepts("include", "A glob pattern (see FileSystem#getPathMatcher) for including only specified files from the output").withRequiredArg().ofType(String.class);
 
