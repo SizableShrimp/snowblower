@@ -33,18 +33,6 @@ java {
 repositories {
     mavenCentral()
     maven gradleutils.maven
-    maven {
-        name = "Maven for PR #41" // https://github.com/neoforged/InstallerTools/pull/41
-        url = uri("https://prmaven.neoforged.net/InstallerTools/pr41")
-        content {
-            includeModule("net.neoforged.installertools", "binarypatcher")
-            includeModule("net.neoforged.installertools", "cli-utils")
-            includeModule("net.neoforged.installertools", "installertools")
-            includeModule("net.neoforged.installertools", "jarsplitter")
-            includeModule("net.neoforged.installertools", "problems-api")
-            includeModule("net.neoforged.installertools", "zipinject")
-        }
-    }
 }
 
 configurations {
@@ -64,7 +52,7 @@ dependencies {
     shade 'net.neoforged:srgutils:1.0.10'
     shade 'org.vineflower:vineflower:1.11.2'
     shade 'net.neoforged:vineflower-plugins:0.1.5'
-    shade 'net.neoforged.installertools:installertools:4.0.14-pr-41-main'
+    shade 'net.neoforged.installertools:installertools:4.0.13'
     shade 'net.neoforged:mergetool:2.0.7'
 
     shade 'org.bouncycastle:bcpkix-jdk18on:1.80'

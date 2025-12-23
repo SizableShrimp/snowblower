@@ -241,6 +241,7 @@ public class Generator implements AutoCloseable {
 
         this.remoteName = foundRemote;
 
+        // TODO: The text progress monitor on stdout tends to mess with the logs; should we represent this data another way or turn it off?
         this.git.fetch().setRemote(remoteName).setProgressMonitor(new TextProgressMonitor(new OutputStreamWriter(System.out))).call();
     }
 

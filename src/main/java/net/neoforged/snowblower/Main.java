@@ -121,7 +121,6 @@ public class Main {
             // TODO: Extend to support all april fools versions (use the
             //  "versions" variant with the forked version & the april fools versions as the only 2 in the list)
             //  Use apex's config as a baseline/inspiration
-            // TODO: Follow up with shartte on fixing installertools to work for old (pre-1.16) MC versions with ProcessMinecraftJar task
             // TODO: Adapt PR #9 from mja00 to current changes (and hide all library downloads behind a Github Actions log group)
             cfg = new Config(branches);
         }
