@@ -79,7 +79,7 @@ public class UnobfuscatedVersions {
                 for (Path p : iterable) {
                     String filename = p.getFileName().toString();
                     if (!filename.endsWith(".json"))
-                        return;
+                        continue;
 
                     URL url = UnobfuscatedVersions.class.getResource(UNOBF_ROOT + '/' + dirPath.relativize(p).toString().replace('\\', '/'));
                     Version version;

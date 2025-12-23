@@ -192,6 +192,8 @@ public class Generator implements AutoCloseable {
             this.createdNewBranch = !exists;
             LOGGER.info("Checking out {} local branch \"{}\"", exists ? "existing" : "new", branchName);
             git.checkout().setOrphan(!exists).setName(branchName).call(); // Move to correctly named branch
+        } else {
+            LOGGER.info("Current branch already set to local branch \"{}\"", branchName);
         }
 
         git.reset().setMode(ResetType.HARD).call();
@@ -696,9 +698,8 @@ public class Generator implements AutoCloseable {
                 Iterable<Path> iterable = () -> walker.filter(Files::isRegularFile).iterator();
                 for (Path p : iterable) {
                     var relative = root.relativize(p);
-                    if (!matcher.matches(relative)) {
-                        return;
-                    }
+                    if (!matcher.matches(relative))
+                        continue;
 
                     var target = (p.toString().endsWith(".java") ? java : resources).resolve(relative.toString());
 

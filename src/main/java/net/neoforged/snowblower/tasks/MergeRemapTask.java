@@ -41,7 +41,7 @@ public class MergeRemapTask {
 
         var clientJar = getJar("client", cache, version);
         var serverFullJar = getJar("server", cache, version);
-        var serverJar = BundlerExtractTask.getExtractedServerJar(cache, serverFullJar, depCache);
+        var serverJar = BundlerExtractTask.getExtractedServerJar(cache, serverFullJar, depCache, mappings);
 
         var key = new Cache()
                 .put(Tools.INSTALLERTOOLS, depCache)
