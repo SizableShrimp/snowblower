@@ -7,6 +7,7 @@ net.neoforged:srgutils=abb471237b33b19f040ada00bfbad1ec45b949b6 # 1.0.10
 org.vineflower:vineflower=f02c1f554d5bd9cc0fd74d4977efba364d85e739 # 1.11.2
 net.neoforged:vineflower-plugins=dd9b3ec730bc38defe928b0871e60e7a60b0119a # 0.1.5
 net.neoforged.installertools:installertools=6155488cfd4d7912aaf4bfeeabc6a3612a5a59e7 # 4.0.14-pr-41-main
+net.neoforged:mergetool=c5577c12d6cdbc50f6870d002282cca7f5382910 # 2.0.7
 org.bouncycastle:bcpkix-jdk18on=5277dfaaef2e92ce1d802499599a0ca7488f86e6 # 1.80
 com.fasterxml.jackson.dataformat:jackson-dataformat-yaml=66658356a375664262c227dad09adc51dbc09c54 # 2.18.3
 io.jsonwebtoken:jjwt-api=478886a888f6add04937baf0361144504a024967 # 0.12.6

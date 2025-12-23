@@ -5,6 +5,8 @@
 package net.neoforged.snowblower.tasks;
 
 import net.neoforged.installertools.ProcessMinecraftJar;
+import net.neoforged.mergetool.AnnotationVersion;
+import net.neoforged.mergetool.Merger;
 import net.neoforged.snowblower.data.Version;
 import net.neoforged.snowblower.util.Cache;
 import net.neoforged.snowblower.util.DependencyHashCache;
@@ -27,11 +29,16 @@ public class MergeRemapTask {
     private static final Logger LOGGER = LoggerFactory.getLogger(MergeRemapTask.class);
 
     private static Cache getKey(Version version, Path mappings, DependencyHashCache depCache) throws IOException {
-        return new Cache()
+        var key = new Cache()
                 .put(Tools.INSTALLERTOOLS, depCache)
                 .put("map", mappings)
                 .put("client", getSha("client", version))
                 .put("server-full", getSha("server", version));
+
+        if (!version.isUnobfuscated())
+            key.put(Tools.MERGETOOL, depCache);
+
+        return key;
     }
 
     public static boolean inPartialCache(Path cache, Version version, DependencyHashCache depCache) throws IOException {
@@ -67,25 +74,53 @@ public class MergeRemapTask {
 
         if (!Files.exists(joinedJar) || !key.isValid(keyF)) {
             LOGGER.debug("Merging client and server jars and remapping");
-            List<String> args = new ArrayList<>(List.of(
-                    "--input", clientJar.toString(),
-                    "--input", serverJar.toString(),
-                    "--output", joinedJar.toString(),
-                    "--no-mod-manifest",
-                    "--no-dist-annotations" // Avoid using ASM to process; the dist annotations are very minor for Snowblower's purposes
-            ));
-            if (mappings != null) {
-                args.add("--input-mappings");
-                args.add(mappings.toString());
-            }
 
-            var stdout = System.out;
-            try (var ps = new PrintStream(OutputStream.nullOutputStream())) {
-                System.setOut(ps); // Turn off installertools log output
+            Path joinedObfJar = null;
+            try {
+                List<String> args = new ArrayList<>();
+                if (version.isUnobfuscated()) {
+                    args.addAll(List.of(
+                            "--input", clientJar.toString(),
+                            "--input", serverJar.toString()
+                    ));
+                } else {
+                    // If obfuscated, run MergeTool instead of using ProcessMinecraftJar to create the obfuscated joined jar
+                    // so that dist annotations are respected on class members (methods & fields).
+                    // Dist annotations on class members are used in older versions, e.g., certain constructors of Vector3f
+                    // in at least the 1.14-1.16 era.
+                    joinedObfJar = cache.resolve("joined-obf.jar");
+                    Merger merger = new Merger(clientJar.toFile(), serverJar.toFile(), joinedObfJar.toFile());
+                    merger.annotate(AnnotationVersion.API, true);
+                    merger.keepData();
+                    merger.skipMeta();
+                    merger.process();
 
-                new ProcessMinecraftJar().process(args.toArray(String[]::new));
+                    args.addAll(List.of("--input", joinedObfJar.toString()));
+                    // Dist annotations are injected by MergeTool
+                    args.add("--no-dist-annotations");
+                }
+
+                args.addAll(List.of(
+                        "--output", joinedJar.toString(),
+                        "--no-mod-manifest"
+                ));
+
+                if (mappings != null) {
+                    args.add("--input-mappings");
+                    args.add(mappings.toString());
+                }
+
+                var stdout = System.out;
+                try (var ps = new PrintStream(OutputStream.nullOutputStream())) {
+                    System.setOut(ps); // Turn off installertools log output
+
+                    new ProcessMinecraftJar().process(args.toArray(String[]::new));
+                } finally {
+                    System.setOut(stdout);
+                }
             } finally {
-                System.setOut(stdout);
+                if (joinedObfJar != null)
+                    Files.deleteIfExists(joinedObfJar);
             }
 
             key.write(keyF);

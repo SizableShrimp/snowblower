@@ -36,7 +36,16 @@ public class DecompileTask {
             "--ignore-invalid-bytecode",
             "--bytecode-source-mapping",
             "--indent-string=    ",
-            "--dump-code-lines"
+            "--dump-code-lines",
+            // Disable the OnlyInPlugin provided by neoforged's VineflowerPlugins.
+            // Dist annotations are provided in MergeRemapTask either by MergeTool for obfuscated game versions,
+            // or by InstallerTool's ProcessMinecraftJar for unobfuscated game versions.
+            // As of the writing of this comment (12/23/2025), Vineflower's plugin system is currently bugged,
+            // leading to a lack of proper support for injecting dist annotations.
+            // Specifically, plugins don't get called for classes without any concrete methods, e.g., interfaces with no
+            // default methods, which means dist annotations are missed in that case when relying on the Vineflower plugin.
+            // Also, the plugin itself does not respect dist annotations on nested classes (which are necessary).
+            "--add-onlyin=0"
     );
     private static final List<String> DECOMPILE_ARGS_OBF;
 

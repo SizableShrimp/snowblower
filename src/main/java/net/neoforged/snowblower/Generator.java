@@ -67,7 +67,7 @@ public class Generator implements AutoCloseable {
      * so that {@code --start-over-if-required} can detect it and start over.
      */
     // If making changes to generation that affect the output (e.g., updating the decompiler or adding/removing decompiler args), increment this number.
-    public static final int VERSION_ID = 1;
+    public static final int VERSION_ID = 2;
     public static final int COMMIT_BATCH_SIZE = 10;
     private static final Logger LOGGER = LoggerFactory.getLogger(Generator.class);
 
@@ -98,7 +98,9 @@ public class Generator implements AutoCloseable {
         this.extraMappings = extraMappings == null ? null : extraMappings.toAbsolutePath().normalize();
         this.depCache = depCache;
         this.includes = includes;
-        this.excludes = excludes;
+        this.excludes = new ArrayList<>(excludes);
+        // Always exclude the manifest (it's included when using ProcessMinecraftJar from InstallerTools)
+        this.excludes.add("META-INF/MANIFEST.MF");
     }
 
     public Generator setup(String branchName, @Nullable URIish remoteUrl, boolean checkout, boolean push, Config cfg, BranchSpec cliBranch,

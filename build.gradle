@@ -65,6 +65,7 @@ dependencies {
     shade 'org.vineflower:vineflower:1.11.2'
     shade 'net.neoforged:vineflower-plugins:0.1.5'
     shade 'net.neoforged.installertools:installertools:4.0.14-pr-41-main'
+    shade 'net.neoforged:mergetool:2.0.7'
 
     shade 'org.bouncycastle:bcpkix-jdk18on:1.80'
     shade 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.18.3'
