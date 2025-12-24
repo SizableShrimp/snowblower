@@ -19,14 +19,13 @@ import org.eclipse.jgit.transport.CredentialsProvider;
 import org.eclipse.jgit.transport.URIish;
 
 import java.io.File;
+import java.io.InputStreamReader;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 public class Main {
     public static void main(String[] args) throws Exception {
@@ -115,14 +114,14 @@ public class Main {
                 throw new RuntimeException(e);
             }
         } else {
-            Map<String, BranchSpec> branches = new HashMap<>();
-            branches.put("release", new BranchSpec("release", null, null));
-            branches.put("dev", new BranchSpec("all", null, null));
-            // TODO: Extend to support all april fools versions (use the
-            //  "versions" variant with the forked version & the april fools versions as the only 2 in the list)
-            //  Use apex's config as a baseline/inspiration
-            // TODO: Adapt PR #9 from mja00 to current changes (and hide all library downloads behind a Github Actions log group)
-            cfg = new Config(branches);
+            try (var is = Main.class.getResourceAsStream("/default_branch_config.json")) {
+                if (is == null)
+                    throw new IllegalStateException("Could not find default branch config? Should be impossible!");
+
+                try (var reader = new InputStreamReader(is)) {
+                    cfg = Util.GSON.fromJson(reader, Config.class);
+                }
+            }
         }
 
         if (options.has(committerO)) {
