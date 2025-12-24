@@ -64,8 +64,8 @@ public class MergeRemapTask {
         var key = getKey(version, mappings, depCache);
         var keyF = cache.resolve(JOINED_JAR_CACHE_FILENAME);
 
-        var clientJar = getJar("client", cache, version);
-        var serverFullJar = getJar("server", cache, version);
+        var clientJar = downloadMinecraftJar("client", cache, version);
+        var serverFullJar = downloadMinecraftJar("server", cache, version);
         var serverJar = BundlerExtractTask.getExtractedServerJar(cache, version, serverFullJar, depCache, mappings);
 
         key.put("client", clientJar)
@@ -139,12 +139,12 @@ public class MergeRemapTask {
         return version.downloads().get(type).sha1();
     }
 
-    private static Path getJar(String type, Path cache, Version version) throws IOException {
+    public static Path downloadMinecraftJar(String type, Path cache, Version version) throws IOException {
         var jar = cache.resolve(type + ".jar");
         var keyF = cache.resolve(type + ".jar.cache");
         var dl = version.downloads().get(type);
         if (dl == null || dl.sha1() == null)
-            throw new IllegalStateException("Could not download \"" + type + "\" jar as version json doesn't have download entry");
+            throw new IllegalStateException("Could not download \"" + type + "\" jar as version json for version \"" + version.id() + "\" doesn't have download entry");
 
         // We include the hash from the json, because Mojang HAS done silent updates before
         // Should we detect/notify about this somehow?
@@ -156,7 +156,7 @@ public class MergeRemapTask {
             try {
                 Util.downloadFile(jar, dl.url(), dl.sha1());
             } catch (IOException e) {
-                throw new IOException("Failed to download " + type + " jar", e);
+                throw new IOException("Failed to download \"" + type + "\" jar for version \"" + version.id() + "\"", e);
             }
 
             key.put(type, jar);

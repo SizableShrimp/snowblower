@@ -16,6 +16,7 @@ import net.neoforged.snowblower.tasks.MappingTask;
 import net.neoforged.snowblower.tasks.MergeRemapTask;
 import net.neoforged.snowblower.tasks.enhance.EnhanceVersionTask;
 import net.neoforged.snowblower.tasks.init.InitTask;
+import net.neoforged.snowblower.util.ArtifactDiscoverer;
 import net.neoforged.snowblower.util.DependencyHashCache;
 import net.neoforged.snowblower.util.HashFunction;
 import net.neoforged.snowblower.util.UnobfuscatedVersions;
@@ -292,9 +293,12 @@ public class Generator implements AutoCloseable {
 
         pushRemainingCommits(); // Push old commits in increments of 10 in case we didn't push them then
 
+        var libs = this.cache.resolve("libraries");
+
+        ArtifactDiscoverer.downloadArtifacts(cache, libs, extraMappings, toGenerate, partialCache);
+
         LOGGER.info("Generating {} versions: {}", toGenerate.size(), toGenerate.stream().map(VersionInfo::id).toList());
 
-        var libs = this.cache.resolve("libraries");
         boolean generatedAny = !toGenerate.isEmpty();
         for (int x = 0; x < toGenerate.size(); x++) {
             var versionInfo = toGenerate.get(x);
@@ -586,6 +590,7 @@ public class Generator implements AutoCloseable {
     private static List<VersionInfo> findVersionsWithMappings(List<VersionInfo> versions, Path cache, Path extraMappings) throws IOException {
         LOGGER.info("Downloading version manifests");
         GitHubActions.logStartGroup("Downloading version manifests");
+
         List<VersionInfo> ret = new ArrayList<>();
         for (var ver : versions) {
             // Download the version json file.
@@ -608,9 +613,10 @@ public class Generator implements AutoCloseable {
             } else if (fullVersion.isUnobfuscated()) {
                 ret.add(ver);
             }
-
         }
+
         GitHubActions.logEndGroup();
+
         return ret;
     }
 
@@ -748,7 +754,7 @@ public class Generator implements AutoCloseable {
         return true;
     }
 
-    private List<Path> getLibraries(Path cache, Version version) throws IOException {
+    private List<Path> getLibraries(Path cache, Version version) {
         if (version.libraries() == null)
             return Collections.emptyList();
 
@@ -759,13 +765,12 @@ public class Generator implements AutoCloseable {
             var dl = lib.downloads().get("artifact");
             var target = cache.resolve(dl.path());
 
-            if (!Files.exists(target)) {
-                Files.createDirectories(target.getParent());
-                Util.downloadFile(target, dl.url(), dl.sha1());
-            }
+            if (!Files.exists(target))
+                continue; // Downloaded ahead of time by ArtifactDiscoverer
 
             ret.add(target);
         }
+
         return ret;
     }
 

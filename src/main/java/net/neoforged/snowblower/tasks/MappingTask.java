@@ -93,20 +93,8 @@ public class MappingTask {
     private static IMappingFile downloadMappings(Path cache, Path extraMappings, Version version, boolean unobfuscated, String type) throws IOException {
         var mappings = cache.resolve(type + "_mappings.txt");
 
-        if (!Files.exists(mappings)) {
-            boolean copiedFromExtra = false;
-
-            if (extraMappings != null) {
-                Path extraMap = extraMappings.resolve(version.type()).resolve(version.id().toString()).resolve("maps").resolve(type + ".txt");
-                if (Files.exists(extraMap)) {
-                    Files.copy(extraMap, mappings, StandardCopyOption.REPLACE_EXISTING);
-                    copiedFromExtra = true;
-                }
-            }
-
-            if (!copiedFromExtra && (unobfuscated || !Util.downloadFile(mappings, version, type + "_mappings")))
-                return null;
-        }
+        if (!Files.exists(mappings))
+            return null; // Downloaded ahead of time by ArtifactDiscoverer
 
         try (var in = Files.newInputStream(mappings)) {
             return IMappingFile.load(in);
